@@ -13,5 +13,10 @@ class User(Base):
     
     profiles = relationship("Profile", back_populates="owner", cascade="all, delete-orphan")
     badges = relationship("UserBadge", back_populates="user")
+    votes_cast = relationship("Vote", backref="voter", lazy="dynamic")
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    @property
+    def votes_cast_count(self):
+        return self.votes_cast.count()

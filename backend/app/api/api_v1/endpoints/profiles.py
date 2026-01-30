@@ -17,11 +17,15 @@ def get_random_pair(
     type: ProfileType = ProfileType.REAL,
     gender: Gender = Gender.FEMALE,
     category_id: Optional[int] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Optional[models.User] = Depends(deps.get_current_user_optional)
 ):
     """
     Get two random profiles of the same type and gender for comparison.
     """
+    # Enforce REAL type for now as per requirements
+    type = ProfileType.REAL
+    
     query = db.query(Profile).filter(
         Profile.type == type,
         Profile.gender == gender,
@@ -31,10 +35,32 @@ def get_random_pair(
     
     if category_id:
         query = query.filter(Profile.category_id == category_id)
+
+    # Filter out profiles the user has already voted on (if logged in)
+    if current_user:
+        from app.models.vote import Vote
+        # Subquery to find all profile IDs the user has voted on (as winner or loser)
+        voted_winner_ids = db.query(Vote.winner_id).filter(Vote.voter_id == current_user.id)
+        voted_loser_ids = db.query(Vote.loser_id).filter(Vote.voter_id == current_user.id)
+        
+        query = query.filter(Profile.id.notin_(voted_winner_ids))
+        query = query.filter(Profile.id.notin_(voted_loser_ids))
         
     profiles = query.order_by(func.random()).limit(2).all()
     
     if len(profiles) < 2:
+        # Check if it's because they voted on everything
+        if current_user:
+            total_count = db.query(Profile).filter(
+                Profile.type == type,
+                Profile.gender == gender,
+                Profile.is_active == True,
+                Profile.is_approved == True
+            ).count()
+            if total_count >= 2:
+                 # If we have enough profiles but query returned < 2, it means they voted on everything
+                 raise HTTPException(status_code=404, detail="No more profiles to vote on! You've seen them all.")
+        
         raise HTTPException(status_code=404, detail="Not enough profiles for comparison")
     
     return profiles
@@ -174,34 +200,43 @@ def get_ranking(
     type: ProfileType = ProfileType.REAL,
     gender: Gender = None,
     category_id: Optional[int] = None,
-    limit: int = 100,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(deps.get_current_user)
+    limit: int = 50,
+    db: Session = Depends(get_db)
 ):
-    query = db.query(Profile).filter(Profile.type == type, Profile.is_active == True)
+    """
+    Get top rated profiles.
+    """
+    query = db.query(Profile).filter(
+        Profile.type == type,
+        Profile.is_active == True,
+        Profile.is_approved == True
+    )
+    
     if gender:
         query = query.filter(Profile.gender == gender)
+        
     if category_id:
         query = query.filter(Profile.category_id == category_id)
-    
+        
     return query.order_by(Profile.elo_score.desc()).limit(limit).all()
 
-@router.delete("/{profile_id}", response_model=schemas.Msg)
+@router.delete("/{id}", response_model=schemas.Profile)
 def delete_profile(
-    profile_id: int,
+    *,
     db: Session = Depends(get_db),
+    id: int,
     current_user: models.User = Depends(deps.get_current_user)
 ):
     """
-    Delete a profile (only owner or superuser).
+    Delete a profile.
     """
-    profile = db.query(Profile).filter(Profile.id == profile_id).first()
+    profile = db.query(Profile).filter(Profile.id == id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    
+        
     if profile.user_id != current_user.id and not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
-    
+        raise HTTPException(status_code=400, detail="Not enough permissions")
+        
     db.delete(profile)
     db.commit()
-    return {"msg": "Profile deleted successfully"}
+    return profile

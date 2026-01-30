@@ -14,14 +14,14 @@ router = APIRouter()
 def cast_vote(
     vote_in: schemas.VoteCreate,
     db: Session = Depends(get_db),
-    current_user: Optional[models.User] = Depends(deps.get_current_user)
+    current_user: models.User = Depends(deps.get_current_user)
 ):
     try:
         vote = voting_service.record_vote(
             db, 
             winner_id=vote_in.winner_id, 
             loser_id=vote_in.loser_id,
-            voter_id=current_user.id if current_user else None
+            voter_id=current_user.id
         )
         return vote
     except ValueError as e:

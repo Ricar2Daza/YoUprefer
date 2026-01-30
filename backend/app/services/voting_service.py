@@ -12,6 +12,17 @@ class VotingService:
         if not winner or not loser:
             raise ValueError("Profile not found")
 
+        # Check if user already voted for this pair (in either direction)
+        if voter_id:
+            existing_vote = db.query(Vote).filter(
+                Vote.voter_id == voter_id,
+                ((Vote.winner_id == winner_id) & (Vote.loser_id == loser_id)) |
+                ((Vote.winner_id == loser_id) & (Vote.loser_id == winner_id))
+            ).first()
+            
+            if existing_vote:
+                raise ValueError("You have already voted on this pair")
+
         # Calculate new ELO scores
         new_winner_rating, new_loser_rating = ranking_service.calculate_elo(
             winner.elo_score, loser.elo_score

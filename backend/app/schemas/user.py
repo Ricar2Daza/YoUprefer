@@ -17,6 +17,7 @@ class UserUpdate(UserBase):
 
 class User(UserBase):
     id: Optional[int] = None
+    votes_cast_count: int = 0
 
     class Config:
         from_attributes = True
