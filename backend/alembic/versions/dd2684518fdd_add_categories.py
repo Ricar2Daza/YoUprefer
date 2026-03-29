@@ -32,8 +32,10 @@ def upgrade() -> None:
     op.create_index(op.f('ix_category_id'), 'category', ['id'], unique=False)
     op.create_index(op.f('ix_category_name'), 'category', ['name'], unique=True)
     op.create_index(op.f('ix_category_slug'), 'category', ['slug'], unique=True)
-    op.add_column('profile', sa.Column('category_id', sa.Integer(), nullable=True))
-    op.create_foreign_key(None, 'profile', 'category', ['category_id'], ['id'])
+    
+    with op.batch_alter_table('profile', schema=None) as batch_op:
+        batch_op.add_column(sa.Column('category_id', sa.Integer(), nullable=True))
+        batch_op.create_foreign_key('fk_profile_category', 'category', ['category_id'], ['id'])
     # ### end Alembic commands ###
 
 

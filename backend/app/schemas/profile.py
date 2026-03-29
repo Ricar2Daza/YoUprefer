@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from datetime import datetime
 from app.models.profile import ProfileType, Gender
 
-# Profile schemas
+# Esquemas de Perfil
 class ProfileBase(BaseModel):
     type: ProfileType
     gender: Gender

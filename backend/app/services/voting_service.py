@@ -1,34 +1,49 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy import or_
 from app.models.profile import Profile
 from app.models.vote import Vote
 from app.services.ranking_service import ranking_service
 
 class VotingService:
     @staticmethod
-    def record_vote(db: Session, winner_id: int, loser_id: int, voter_id: int = None):
-        winner = db.query(Profile).filter(Profile.id == winner_id).first()
-        loser = db.query(Profile).filter(Profile.id == loser_id).first()
+    async def record_vote(db: AsyncSession, winner_id: int, loser_id: int, voter_id: int = None):
+        # Fetch both profiles in a single query
+        result = await db.execute(select(Profile).filter(Profile.id.in_([winner_id, loser_id])))
+        profiles = result.scalars().all()
+        
+        winner = next((p for p in profiles if p.id == winner_id), None)
+        loser = next((p for p in profiles if p.id == loser_id), None)
 
         if not winner or not loser:
-            raise ValueError("Profile not found")
+            raise ValueError("Perfil no encontrado")
 
-        # Check if user already voted for this pair (in either direction)
+        # Verificar que ambos perfiles estén activos y aprobados
+        if not winner.is_active or not winner.is_approved:
+            raise ValueError(f"El perfil ganador no está disponible para votar")
+        if not loser.is_active or not loser.is_approved:
+            raise ValueError(f"El perfil perdedor no está disponible para votar")
+
+        # Verificar si el usuario ya votó por este par (en cualquier dirección)
         if voter_id:
-            existing_vote = db.query(Vote).filter(
+            result_vote = await db.execute(select(Vote).filter(
                 Vote.voter_id == voter_id,
-                ((Vote.winner_id == winner_id) & (Vote.loser_id == loser_id)) |
-                ((Vote.winner_id == loser_id) & (Vote.loser_id == winner_id))
-            ).first()
+                or_(
+                    (Vote.winner_id == winner_id) & (Vote.loser_id == loser_id),
+                    (Vote.winner_id == loser_id) & (Vote.loser_id == winner_id)
+                )
+            ))
+            existing_vote = result_vote.scalars().first()
             
             if existing_vote:
-                raise ValueError("You have already voted on this pair")
+                raise ValueError("Ya has votado en este emparejamiento")
 
-        # Calculate new ELO scores
+        # Calcular nuevos puntajes ELO
         new_winner_rating, new_loser_rating = ranking_service.calculate_elo(
             winner.elo_score, loser.elo_score
         )
 
-        # Update profiles
+        # Actualizar perfiles
         winner.elo_score = new_winner_rating
         winner.win_count += 1
         winner.voted_count += 1
@@ -36,15 +51,16 @@ class VotingService:
         loser.elo_score = new_loser_rating
         loser.voted_count += 1
 
-        # Record vote
+        # Registrar voto
         vote = Vote(
             winner_id=winner_id,
             loser_id=loser_id,
             voter_id=voter_id
         )
         db.add(vote)
-        db.commit()
-        db.refresh(vote)
+        await db.commit()
+        await db.refresh(vote)
         return vote
 
 voting_service = VotingService()
+

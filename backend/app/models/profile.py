@@ -22,18 +22,18 @@ class Profile(Base):
     voted_count = Column(Integer, default=0)
     win_count = Column(Integer, default=0)
     
-    # User linkage for real people
-    user_id = Column(Integer, ForeignKey("user.id"), nullable=True)
+    # Enlace de usuario para personas reales
+    user_id = Column(Integer, ForeignKey("user.id"), nullable=True, index=True)
     owner = relationship("User", back_populates="profiles")
     
-    # Category/Theme linkage
-    category_id = Column(Integer, ForeignKey("category.id"), nullable=True)
+    # Enlace de Categoría/Tema
+    category_id = Column(Integer, ForeignKey("category.id"), nullable=True, index=True)
     category = relationship("Category", back_populates="profiles")
 
-    is_active = Column(Boolean, default=True)
-    is_approved = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=True, index=True)
+    is_approved = Column(Boolean, default=False, index=True)
     
-    # Legal
+    # Aspectos legales
     legal_consent = Column(Boolean, default=False)
     legal_consent_at = Column(DateTime(timezone=True), nullable=True)
     

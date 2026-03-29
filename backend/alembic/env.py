@@ -57,14 +57,10 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode.
-
-    In this scenario we need to create an Engine
-    and associate a connection with the context.
-
-    """
+    """Run migrations in 'online' mode using sync engine (psycopg2)."""
     configuration = config.get_section(config.config_ini_section)
-    configuration["sqlalchemy.url"] = settings.DATABASE_URL
+    base_url = settings.DATABASE_URL.split("?", 1)[0] if settings.DATABASE_URL else ""
+    configuration["sqlalchemy.url"] = base_url.replace("postgresql://", "postgresql+psycopg2://")
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",
@@ -72,10 +68,7 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
-
+        context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()
 

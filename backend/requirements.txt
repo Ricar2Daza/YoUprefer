@@ -6,13 +6,15 @@ pydantic
 pydantic-settings
 python-dotenv
 python-jose[cryptography]
-passlib[bcrypt]
+passlib
 python-multipart
 redis
 boto3
-cors
 alembic
 email-validator
 pytest
+pytest-cov
 httpx
 pytest-asyncio
+aiosqlite
+asyncpg

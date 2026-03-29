@@ -8,12 +8,14 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     full_name = Column(String)
+    avatar_url = Column(String, nullable=True)
     is_active = Column(Boolean(), default=True)
     is_superuser = Column(Boolean(), default=False)
     
     profiles = relationship("Profile", back_populates="owner", cascade="all, delete-orphan")
     badges = relationship("UserBadge", back_populates="user")
     votes_cast = relationship("Vote", backref="voter", lazy="dynamic")
+    notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

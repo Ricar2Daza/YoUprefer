@@ -33,7 +33,7 @@ def upgrade() -> None:
     op.create_table('season',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('name', sa.String(), nullable=True),
-    sa.Column('started_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('started_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
     sa.Column('ended_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('is_active', sa.Boolean(), nullable=True),
     sa.PrimaryKeyConstraint('id')
@@ -46,7 +46,7 @@ def upgrade() -> None:
     sa.Column('badge_id', sa.Integer(), nullable=True),
     sa.Column('profile_id', sa.Integer(), nullable=True),
     sa.Column('season_id', sa.Integer(), nullable=True),
-    sa.Column('awarded_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('awarded_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
     sa.ForeignKeyConstraint(['badge_id'], ['badge.id'], ),
     sa.ForeignKeyConstraint(['profile_id'], ['profile.id'], ),
     sa.ForeignKeyConstraint(['season_id'], ['season.id'], ),

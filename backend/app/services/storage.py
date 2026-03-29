@@ -11,14 +11,14 @@ class StorageService:
                 aws_access_key_id=settings.R2_ACCESS_KEY_ID,
                 aws_secret_access_key=settings.R2_SECRET_ACCESS_KEY,
                 config=Config(signature_version='s3v4'),
-                region_name='auto' # R2 uses auto
+                region_name='auto' # R2 usa auto
             )
         else:
             self.s3_client = None
 
     def get_presigned_url(self, object_name: str, expiration: int = 3600):
         """
-        Generate a presigned URL to upload an image directly to R2.
+        Generar una URL prefirmada para subir una imagen directamente a R2.
         """
         if not self.s3_client:
             return None
@@ -31,12 +31,12 @@ class StorageService:
             )
             return response
         except Exception as e:
-            # In production, log this error
+            # En producción, registrar este error
             return None
 
     def get_public_url(self, object_name: str):
         """
-        Get the public CDN URL for the image.
+        Obtener la URL pública del CDN para la imagen.
         """
         if settings.R2_PUBLIC_DOMAIN:
             return f"{settings.R2_PUBLIC_DOMAIN}/{object_name}"
@@ -44,11 +44,11 @@ class StorageService:
 
     def upload_file(self, file_content: bytes, object_name: str, content_type: str = "image/jpeg"):
         """
-        Directly upload file to R2 (used by upload-direct endpoint).
+        Subir archivo directamente a R2 (usado por el endpoint upload-direct).
         """
         if not self.s3_client:
-            print("Warning: R2 credentials not configured. Skipping upload.")
-            return True # Pretend it worked for local dev if no creds
+            print("Advertencia: Credenciales R2 no configuradas. Omitiendo subida.")
+            return True # Simular que funcionó para desarrollo local si no hay credenciales
         
         try:
             self.s3_client.put_object(
@@ -59,7 +59,7 @@ class StorageService:
             )
             return True
         except Exception as e:
-            print(f"Error uploading to R2: {e}")
+            print(f"Error subiendo a R2: {e}")
             return False
 
 storage_service = StorageService()

@@ -28,7 +28,7 @@ def upgrade() -> None:
     sa.Column('full_name', sa.String(), nullable=True),
     sa.Column('is_active', sa.Boolean(), nullable=True),
     sa.Column('is_superuser', sa.Boolean(), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_user_email'), 'user', ['email'], unique=True)
@@ -46,7 +46,7 @@ def upgrade() -> None:
     sa.Column('is_approved', sa.Boolean(), nullable=True),
     sa.Column('legal_consent', sa.Boolean(), nullable=True),
     sa.Column('legal_consent_at', sa.DateTime(timezone=True), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['user_id'], ['user.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -59,7 +59,7 @@ def upgrade() -> None:
     sa.Column('winner_id', sa.Integer(), nullable=False),
     sa.Column('loser_id', sa.Integer(), nullable=False),
     sa.Column('voter_id', sa.Integer(), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=True),
     sa.ForeignKeyConstraint(['loser_id'], ['profile.id'], ),
     sa.ForeignKeyConstraint(['voter_id'], ['user.id'], ),
     sa.ForeignKeyConstraint(['winner_id'], ['profile.id'], ),

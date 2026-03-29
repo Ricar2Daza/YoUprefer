@@ -4,8 +4,8 @@ from app.db.base_class import Base
 
 class Vote(Base):
     id = Column(Integer, primary_key=True, index=True)
-    winner_id = Column(Integer, ForeignKey("profile.id"), nullable=False)
-    loser_id = Column(Integer, ForeignKey("profile.id"), nullable=False)
-    voter_id = Column(Integer, ForeignKey("user.id"), nullable=True) # Optional for visitors
+    winner_id = Column(Integer, ForeignKey("profile.id"), nullable=False, index=True)
+    loser_id = Column(Integer, ForeignKey("profile.id"), nullable=False, index=True)
+    voter_id = Column(Integer, ForeignKey("user.id"), nullable=True, index=True)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())

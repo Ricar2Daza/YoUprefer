@@ -10,3 +10,6 @@ class Token(BaseModel):
 class TokenPayload(BaseModel):
     sub: Optional[int] = None
     type: Optional[str] = None
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str

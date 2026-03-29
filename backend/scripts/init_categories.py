@@ -8,10 +8,10 @@ from app.models.category import Category
 from app.models.profile import Profile
 
 def init_categories(db: Session):
-    # Check if General category exists
+    # Verificar si existe la categoría General
     general = db.query(Category).filter(Category.slug == "general").first()
     if not general:
-        print("Creating 'General' category...")
+        print("Creando categoría 'General'...")
         general = Category(
             name="General",
             slug="general",
@@ -22,9 +22,9 @@ def init_categories(db: Session):
         db.commit()
         db.refresh(general)
     else:
-        print("'General' category already exists.")
+        print("La categoría 'General' ya existe.")
 
-    # Assign all profiles with null category to General
+    # Asignar todos los perfiles sin categoría a General
     profiles = db.query(Profile).filter(Profile.category_id == None).all()
     count = 0
     for p in profiles:
@@ -33,9 +33,9 @@ def init_categories(db: Session):
     
     if count > 0:
         db.commit()
-        print(f"Assigned {count} profiles to 'General' category.")
+        print(f"Asignados {count} perfiles a la categoría 'General'.")
     else:
-        print("No profiles needed category assignment.")
+        print("Ningún perfil necesitó asignación de categoría.")
 
 if __name__ == "__main__":
     db = SessionLocal()

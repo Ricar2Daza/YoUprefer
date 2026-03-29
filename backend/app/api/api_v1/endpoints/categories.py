@@ -1,37 +1,38 @@
 from typing import Any, List
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
 from app import models, schemas
 from app.api import deps
-from app.db.session import get_db
 from app.models.category import Category
 
 router = APIRouter()
 
 @router.get("/", response_model=List[schemas.Category])
-def read_categories(
+async def read_categories(
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(deps.get_async_db),
 ):
     """
     Retrieve categories.
     """
-    categories = db.query(Category).filter(Category.is_active == True).offset(skip).limit(limit).all()
+    result = await db.execute(select(Category).filter(Category.is_active == True).offset(skip).limit(limit))
+    categories = result.scalars().all()
     return categories
 
 @router.post("/", response_model=schemas.Category)
-def create_category(
+async def create_category(
     category_in: schemas.CategoryCreate,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(deps.get_current_active_superuser),
+    db: AsyncSession = Depends(deps.get_async_db),
+    current_user: models.User = Depends(deps.get_current_active_superuser_async),
 ):
     """
     Create new category (superuser only).
     """
-    category = db.query(Category).filter(Category.slug == category_in.slug).first()
+    result = await db.execute(select(Category).filter(Category.slug == category_in.slug))
+    category = result.scalars().first()
     if category:
         raise HTTPException(
             status_code=400,
@@ -44,6 +45,7 @@ def create_category(
         is_active=category_in.is_active,
     )
     db.add(category)
-    db.commit()
-    db.refresh(category)
+    await db.commit()
+    await db.refresh(category)
     return category
+

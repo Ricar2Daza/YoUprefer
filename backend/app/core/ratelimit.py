@@ -1,38 +1,34 @@
-import redis
-import fakeredis
 from app.core.config import settings
 from fastapi import HTTPException, Request, status
+from app.core.redis_client import redis_client
 import time
-
-# Create redis client
-# Using a try-except to handle cases where redis might not be available
-try:
-    redis_client = redis.Redis(
-        host=settings.REDIS_HOST,
-        port=settings.REDIS_PORT,
-        decode_responses=True,
-        socket_connect_timeout=1 # Fast fail
-    )
-    redis_client.ping()
-    print("✅ Connected to real Redis")
-except:
-    print("⚠️ Redis (real) not found. Using InMemory FakeRedis.")
-    redis_client = fakeredis.FakeRedis(decode_responses=True)
+import redis
+from jose import jwt
 
 def RateLimiter(times: int, seconds: int):
     """
-    Simple Rate Limiter dependency using Redis.
-    Allows 'times' requests per 'seconds'.
+    Dependencia simple de limitador de tasa usando Redis.
+    Permite 'times' peticiones por 'seconds' segundos.
     """
     async def wrapper(request: Request):
         if not redis_client:
-            return  # Skip if redis is not available
+            return  # Omitir si redis no está disponible
 
-        # Get client identifier (IP or User ID)
-        # For authenticated routes, you might want to use current_user.id
+        # Obtener identificador de cliente (IP o ID de usuario extraído del token)
         client_id = request.client.host
+        auth = request.headers.get("authorization") or request.headers.get("Authorization")
+        if auth and auth.lower().startswith("bearer "):
+            token = auth.split(" ", 1)[1].strip()
+            try:
+                payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+                sub = payload.get("sub")
+                if sub is not None:
+                    client_id = f"user:{sub}"
+            except Exception:
+                # Si el token no es válido, seguir usando la IP
+                pass
         
-        # Unique key for this endpoint and client
+        # Clave única para este endpoint y cliente
         key = f"rate_limit:{request.url.path}:{client_id}"
         
         try:
@@ -41,17 +37,17 @@ def RateLimiter(times: int, seconds: int):
             if current and int(current) >= times:
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=f"Too many requests. Limit is {times} per {seconds} seconds."
+                    detail=f"Demasiadas peticiones. El límite es {times} por {seconds} segundos."
                 )
             
-            # Increment and set expiry if new
+            # Incrementar y establecer expiración si es nuevo
             pipe = redis_client.pipeline()
             pipe.incr(key)
             pipe.expire(key, seconds)
             pipe.execute()
             
         except redis.RedisError:
-            # Fallback: if redis fails, let the request through
+            # Fallback: si redis falla, dejar pasar la petición
             pass
             
     return wrapper

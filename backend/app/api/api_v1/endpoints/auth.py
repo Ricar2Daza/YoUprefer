@@ -10,21 +10,23 @@ from app import schemas, models
 from app.api import deps
 from app.core import security
 from app.core.config import settings
+from app.core.redis_client import redis_client
 
 router = APIRouter()
 
 @router.post("/login/access-token", response_model=schemas.Token)
-def login_access_token(
+async def login_access_token(
     db: Session = Depends(deps.get_db), form_data: OAuth2PasswordRequestForm = Depends()
 ) -> Any:
     """
-    OAuth2 compatible token login, get an access token for future requests
+    Inicio de sesión compatible con OAuth2, obtener un token de acceso para futuras solicitudes
     """
     user = db.query(models.User).filter(models.User.email == form_data.username).first()
+    
     if not user or not security.verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(status_code=400, detail="Incorrect email or password")
+        raise HTTPException(status_code=400, detail="Correo o contraseña incorrectos")
     elif not user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
+        raise HTTPException(status_code=400, detail="Usuario inactivo")
     
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     refresh_token_expires = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
@@ -39,36 +41,45 @@ def login_access_token(
     }
 
 @router.post("/refresh-token", response_model=schemas.Token)
-def refresh_token(
-    refresh_token: str,
+async def refresh_token(
+    req: schemas.RefreshTokenRequest,
     db: Session = Depends(deps.get_db),
 ) -> Any:
     """
-    Refresh access token
+    Refrescar token de acceso
     """
     try:
+        # Validar blacklist en Redis antes de decodificar
+        if redis_client:
+            try:
+                if redis_client.get(f"token:blacklist:{req.refresh_token}"):
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token revocado")
+            except Exception:
+                pass
+
         payload = jwt.decode(
-            refresh_token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+            req.refresh_token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
         )
         token_data = schemas.TokenPayload(**payload)
         
         if token_data.type and token_data.type != "refresh":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Invalid token type",
+                detail="Tipo de token inválido",
             )
     except (jwt.JWTError, ValidationError):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Could not validate credentials",
+            detail="No se pudieron validar las credenciales",
         )
     
     user = db.query(models.User).filter(models.User.id == token_data.sub).first()
+    
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
     
     if not user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
+        raise HTTPException(status_code=400, detail="Usuario inactivo")
         
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     refresh_token_expires = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
@@ -83,48 +94,72 @@ def refresh_token(
         "token_type": "bearer",
     }
 
+@router.post("/logout", response_model=schemas.Msg)
+async def logout(
+    req: schemas.RefreshTokenRequest,
+) -> Any:
+    """
+    Logout: revocar refresh token para evitar nuevos accesos.
+    Opcionalmente, los access tokens activos expiran pronto; se puede colocar también en blacklist si se desea.
+    """
+    try:
+        if redis_client:
+            try:
+                # Calcular expiración restante del token para usarla como TTL
+                payload = jwt.decode(req.refresh_token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+                exp = payload.get("exp")
+                ttl = max(int(exp - (__import__("time").time())), 1) if exp else settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+                redis_client.setex(f"token:blacklist:{req.refresh_token}", ttl, "1")
+            except Exception:
+                # Si hay error con Redis o decode, continuar sin bloquear
+                pass
+        return {"msg": "Sesión cerrada correctamente"}
+    except Exception:
+        return {"msg": "Sesión cerrada"}
+
 
 @router.post("/register", response_model=schemas.User)
-def register_user(
+async def register_user(
     *,
     db: Session = Depends(deps.get_db),
     user_in: schemas.UserCreate,
 ) -> Any:
     """
-    Create new user.
+    Crear nuevo usuario.
     """
-    user = db.query(models.User).filter(models.User.email == user_in.email).first()
-    if user:
+    existing = db.query(models.User).filter(models.User.email == user_in.email).first()
+    
+    if existing:
         raise HTTPException(
             status_code=400,
-            detail="The user with this username already exists in the system.",
+            detail="El usuario con este correo ya existe en el sistema.",
         )
     
-    db_obj = models.User(
+    user = models.User(
         email=user_in.email,
         hashed_password=security.get_password_hash(user_in.password),
         full_name=user_in.full_name,
     )
-    db.add(db_obj)
+    db.add(user)
     db.commit()
-    db.refresh(db_obj)
-    return db_obj
+    db.refresh(user)
+    return user
 
 @router.post("/password-recovery/{email}", response_model=schemas.Msg)
-def recover_password(email: str, db: Session = Depends(deps.get_db)) -> Any:
+async def recover_password(email: str, db: Session = Depends(deps.get_db)) -> Any:
     """
-    Password recovery
+    Recuperación de contraseña
     """
     user = db.query(models.User).filter(models.User.email == email).first()
 
     if not user:
         raise HTTPException(
             status_code=404,
-            detail="The user with this username does not exist in the system.",
+            detail="El usuario con este correo no existe en el sistema.",
         )
     
-    # In a real app, you would generate a token and send an email here.
-    # For now, we simulate the flow.
+    # En una aplicación real, generarías un token y enviarías un correo aquí.
+    # Por ahora, simulamos el flujo.
     password_reset_token = security.create_access_token(
         subject=user.email, expires_delta=timedelta(hours=1)
     )
@@ -132,16 +167,16 @@ def recover_password(email: str, db: Session = Depends(deps.get_db)) -> Any:
     # Simulación de envío de correo
     print(f"DEBUG: Password reset token for {email}: {password_reset_token}")
     
-    return {"msg": "Password recovery email sent"}
+    return {"msg": "Correo de recuperación de contraseña enviado"}
 
 @router.post("/reset-password/", response_model=schemas.Msg)
-def reset_password(
+async def reset_password(
     token: str,
     new_password: str,
     db: Session = Depends(deps.get_db),
 ) -> Any:
     """
-    Reset password
+    Restablecer contraseña
     """
     try:
         payload = jwt.decode(
@@ -151,19 +186,20 @@ def reset_password(
     except (jwt.JWTError, ValidationError):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Could not validate credentials",
+            detail="No se pudieron validar las credenciales",
         )
     
     user = db.query(models.User).filter(models.User.email == email).first()
     if not user:
         raise HTTPException(
             status_code=404,
-            detail="The user with this username does not exist in the system.",
+            detail="El usuario con este correo no existe en el sistema.",
         )
     elif not user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
+        raise HTTPException(status_code=400, detail="Usuario inactivo")
     
     user.hashed_password = security.get_password_hash(new_password)
     db.add(user)
     db.commit()
-    return {"msg": "Password updated successfully"}
+    return {"msg": "Contraseña actualizada exitosamente"}
+

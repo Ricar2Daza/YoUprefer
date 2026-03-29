@@ -2,7 +2,7 @@ import sys
 import os
 import random
 
-# Add parent directory to path to import app correctly
+# Agregar directorio padre al path para importar app correctamente
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.db.session import SessionLocal
@@ -13,7 +13,7 @@ from app.core import security
 def seed_data():
     db = SessionLocal()
     try:
-        # 1. Create a demo user if not exists
+        # 1. Crear usuario demo si no existe
         demo_user = db.query(User).filter(User.email == "demo@example.com").first()
         if not demo_user:
             demo_user = User(
@@ -26,7 +26,7 @@ def seed_data():
             db.commit()
             db.refresh(demo_user)
         
-        # 2. Add some "REAL" profiles
+        # 2. Agregar algunos perfiles "REALES"
         if db.query(Profile).filter(Profile.type == ProfileType.REAL).count() == 0:
             print("Seeding REAL profiles...")
             real_images_female = [
@@ -47,7 +47,7 @@ def seed_data():
                 ))
             print("Seeding REAL profiles done.")
 
-        # 3. Add AI profiles (if not already there)
+        # 3. Agregar perfiles IA (si no están)
         if db.query(Profile).filter(Profile.type == ProfileType.AI).count() == 0:
             print("Seeding AI profiles...")
             ai_images = [
