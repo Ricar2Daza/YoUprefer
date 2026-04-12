@@ -4,11 +4,12 @@
 YoUprefer (anteriormente Carómetro) es una plataforma de votación social basada en comparaciones directas (pairwise ranking) al estilo Elo. Los usuarios suben fotos ("perfiles") para competir en rankings globales o categorizados. El sistema incluye gamificación (insignias), notificaciones en tiempo real y gestión de usuarios.
 
 ## 2. Arquitectura del Sistema
-- **Backend**: Python 3.14 + FastAPI (Async).
-- **Frontend**: Next.js 14 (App Router) + Tailwind CSS.
-- **Base de Datos**: PostgreSQL + SQLAlchemy (Async ORM) + Alembic.
-- **Caché/Session**: Redis (gestión de tokens y blacklist).
-- **Almacenamiento**: Cloudfare R2 para imágenes.
+- **Backend**: Python 3.11+ + FastAPI (incluye capas async y sync).
+- **Frontend**: Next.js (App Router) + Tailwind CSS. La versión exacta en el repo está en `frontend/package.json`.
+- **Mobile**: Expo (React Native) + expo-router. La versión exacta en el repo está en `mobile/package.json`.
+- **Base de Datos**: PostgreSQL + SQLAlchemy + Alembic.
+- **Caché/Session**: Redis (gestión de tokens, blacklist, caché y PubSub).
+- **Almacenamiento**: Cloudflare R2 para imágenes (S3 compatible).
 
 ## 3. Módulos del Sistema Existentes
 

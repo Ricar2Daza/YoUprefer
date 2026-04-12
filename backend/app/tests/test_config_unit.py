@@ -13,7 +13,11 @@ def test_database_url_rejects_sqlite():
         Settings(DATABASE_URL="sqlite:///./test.db")
 
 
+def test_database_url_allows_sqlite_when_flag_enabled():
+    s = Settings(DATABASE_URL="sqlite:///./test.db", ALLOW_SQLITE=True)
+    assert s.DATABASE_URL == "sqlite:///./test.db"
+
+
 def test_cors_origins_parses_json_list_string():
     s = Settings(BACKEND_CORS_ORIGINS='["http://localhost:3000","http://localhost:3001"]')
     assert [str(x) for x in s.BACKEND_CORS_ORIGINS] == ["http://localhost:3000", "http://localhost:3001"]
-

@@ -1,4 +1,4 @@
-from typing import Generator, AsyncGenerator
+from typing import Generator, AsyncGenerator, Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt
@@ -25,6 +25,8 @@ def get_db() -> Generator:
         db.close()
 
 async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
+    if AsyncSessionLocal is None:
+        raise RuntimeError("Async DB driver no disponible. Instala 'asyncpg' para Postgres.")
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -102,7 +104,7 @@ async def get_current_user_async(
 
 def get_current_user_optional(
     db: Session = Depends(get_db), token: str = Depends(OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login/access-token", auto_error=False))
-) -> models.User | None:
+) -> Optional[models.User]:
     if not token:
         return None
     try:
@@ -118,7 +120,7 @@ def get_current_user_optional(
 
 async def get_current_user_optional_async(
     db: AsyncSession = Depends(get_async_db), token: str = Depends(OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login/access-token", auto_error=False))
-) -> models.User | None:
+) -> Optional[models.User]:
     if not token:
         return None
     try:

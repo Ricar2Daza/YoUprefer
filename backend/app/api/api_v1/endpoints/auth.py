@@ -5,7 +5,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from jose import jwt
 from pydantic import ValidationError
-
+import httpx
 from app import schemas, models
 from app.api import deps
 from app.core import security
@@ -203,3 +203,56 @@ async def reset_password(
     db.commit()
     return {"msg": "Contraseña actualizada exitosamente"}
 
+@router.post("/google", response_model=schemas.Token)
+async def login_google_oauth(
+    req: schemas.SocialLoginRequest,
+    db: Session = Depends(deps.get_db)
+) -> Any:
+    """
+    Validar y loguear mediante el ID Token de Google (OAuth 2.0).
+    """
+    token = req.token
+    url = f"https://oauth2.googleapis.com/tokeninfo?id_token={token}"
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url)
+        
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Token de Google inválido o expirado"
+            )
+        token_info = response.json()
+        
+    email = token_info.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Token no contiene un correo electrónico")
+        
+    user = db.query(models.User).filter(models.User.email == email).first()
+    
+    if not user:
+        # Registrar como nuevo
+        user = models.User(
+            email=email,
+            full_name=token_info.get("name", "Usuario Google"),
+            hashed_password=security.get_password_hash(token), # Dummy / Random
+            is_active=True
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    elif not user.is_active:
+        raise HTTPException(status_code=400, detail="Usuario inactivo")
+        
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    refresh_token_expires = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    
+    return {
+        "access_token": security.create_access_token(
+            user.id, expires_delta=access_token_expires
+        ),
+        "refresh_token": security.create_refresh_token(
+            user.id, expires_delta=refresh_token_expires
+        ),
+        "token_type": "bearer",
+    }

@@ -1,6 +1,7 @@
 import pytest
 import fakeredis
 from jose import jwt
+from typing import Optional, Dict
 
 from app.core.config import settings
 from app.core.ratelimit import RateLimiter
@@ -17,7 +18,7 @@ class DummyClient:
 
 
 class DummyRequest:
-    def __init__(self, path: str, host: str = "127.0.0.1", headers: dict | None = None):
+    def __init__(self, path: str, host: str = "127.0.0.1", headers: Optional[Dict] = None):
         self.url = DummyUrl(path)
         self.client = DummyClient(host)
         self.headers = headers or {}
@@ -53,4 +54,3 @@ async def test_ratelimiter_uses_user_id_when_bearer_token_present(monkeypatch):
 
     keys = list(r.scan_iter("rate_limit:*"))
     assert any("user:99" in k for k in keys)
-

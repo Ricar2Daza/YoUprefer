@@ -1,0 +1,86 @@
+name: YoUprefer CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test-backend:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-cov httpx
+      - name: Run Tests with Pytest
+        env:
+          SECRET_KEY: test_secret
+          DATABASE_URL: sqlite:///./test.db
+          ALLOW_SQLITE: "true"
+        run: |
+          cd backend
+          pytest --cov=app --cov-report=xml
+
+  test-frontend:
+    name: Frontend Tests & Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Use Node.js 18.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18.x
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm ci
+      - name: Linting
+        run: |
+          cd frontend
+          npm run lint --if-present
+      - name: Run Tests
+        run: |
+          cd frontend
+          npm test --if-present
+      - name: Test Build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+        run: |
+          cd frontend
+          npm run build
+
+  infrastructure:
+    name: Terraform Validation
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./terraform
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+      - name: Terraform Init
+        run: terraform init -backend=false
+      - name: Terraform Validate
+        run: terraform validate
+
+  # Aquí iría el Job de despliegue a AWS ECR y ECS Fargate (dependiente del merge y secrets)
+  deploy:
+    name: Build & Deploy (Simulado)
+    needs: [test-backend, test-frontend, infrastructure]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deployment Echo
+        run: echo "Desplegando la actualización exitosamente tras validación de CI usando Terraform Apply."

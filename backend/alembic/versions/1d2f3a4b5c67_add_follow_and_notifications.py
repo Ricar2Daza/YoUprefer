@@ -18,6 +18,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    dialect_name = bind.dialect.name if bind is not None else ""
+    payload_default = sa.text("'{}'::json") if dialect_name == "postgresql" else sa.text("'{}'")
+    is_read_default = sa.text("false") if dialect_name == "postgresql" else sa.text("0")
+
     # follow table
     op.create_table(
         "follow",
@@ -40,8 +45,8 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("user_id", sa.Integer(), nullable=False),
         sa.Column("type", sa.String(), nullable=False),
-        sa.Column("payload", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")),
-        sa.Column("is_read", sa.Boolean(), nullable=True, server_default=sa.text("false")),
+        sa.Column("payload", sa.JSON(), nullable=False, server_default=payload_default),
+        sa.Column("is_read", sa.Boolean(), nullable=True, server_default=is_read_default),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("(CURRENT_TIMESTAMP)"), nullable=True),
         sa.ForeignKeyConstraint(["user_id"], ["user.id"]),
         sa.PrimaryKeyConstraint("id"),

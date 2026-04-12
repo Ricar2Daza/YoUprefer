@@ -13,3 +13,7 @@ class TokenPayload(BaseModel):
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
+
+class SocialLoginRequest(BaseModel):
+    token: str
+    provider: str = "google"

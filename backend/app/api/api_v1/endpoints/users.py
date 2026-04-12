@@ -1,4 +1,4 @@
-from typing import Any, List
+from typing import Any, List, Optional
 import json
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -311,7 +311,7 @@ async def unfollow_user(
 async def get_followers(
     user_id: int,
     db: AsyncSession = Depends(deps.get_async_db),
-    current_user: models.User | None = Depends(deps.get_current_user_optional_async),
+    current_user: Optional[models.User] = Depends(deps.get_current_user_optional_async),
 ) -> Any:
     result = await db.execute(select(models.User).filter(models.User.id == user_id))
     target_user = result.scalars().first()
@@ -352,7 +352,7 @@ async def get_followers(
 async def get_following(
     user_id: int,
     db: AsyncSession = Depends(deps.get_async_db),
-    current_user: models.User | None = Depends(deps.get_current_user_optional_async),
+    current_user: Optional[models.User] = Depends(deps.get_current_user_optional_async),
 ) -> Any:
     result = await db.execute(select(models.User).filter(models.User.id == user_id))
     target_user = result.scalars().first()
@@ -393,7 +393,7 @@ async def get_following(
 async def get_follow_stats(
     user_id: int,
     db: AsyncSession = Depends(deps.get_async_db),
-    current_user: models.User | None = Depends(deps.get_current_user_optional_async),
+    current_user: Optional[models.User] = Depends(deps.get_current_user_optional_async),
 ) -> Any:
     """
     Obtener estadísticas de seguidores/seguidos y relación mutua con el usuario actual (si hay sesión).

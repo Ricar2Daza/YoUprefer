@@ -1,5 +1,5 @@
-from typing import Optional
-from pydantic import BaseModel, EmailStr
+from typing import Optional, List
+from pydantic import BaseModel, EmailStr, Field
 
 # Esquemas de Usuario
 class UserBadgeBrief(BaseModel):
@@ -26,7 +26,7 @@ class User(UserBase):
     id: Optional[int] = None
     votes_cast_count: int = 0
     badges_count: int = 0
-    badges: list[UserBadgeBrief] = []
+    badges: List[UserBadgeBrief] = Field(default_factory=list)
     follower_count: int = 0
     following_count: int = 0
 

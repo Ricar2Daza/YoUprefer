@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import Session
@@ -12,7 +13,7 @@ class SeasonService:
         result = await db.execute(select(Season).filter(Season.is_active == True))
         return result.scalars().first()
 
-    def get_active_season_sync(self, db: Session) -> Season | None:
+    def get_active_season_sync(self, db: Session) -> Optional[Season]:
         return db.query(Season).filter(Season.is_active == True).first()
 
     async def start_new_season(self, db: AsyncSession, name: str):
