@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import List
 from pydantic import BaseModel
 
 
@@ -20,7 +21,7 @@ class Follow(FollowBase):
 
 
 class FollowingIds(BaseModel):
-    following_ids: list[int]
+    following_ids: List[int]
 
 
 class FollowStats(BaseModel):

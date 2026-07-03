@@ -10,6 +10,7 @@ YoUprefer (anteriormente Carómetro) es una plataforma de votación social basad
 - **Base de Datos**: PostgreSQL en producción; SQLite habilitado para desarrollo/pruebas (bloqueado en producción).
 - **Tiempo real y tokens**: Redis (pub/sub para notificaciones + revocación/blacklist de tokens).
 - **Almacenamiento**: Cloudflare R2 / S3-compatible (opcional; configurable por variables de entorno).
+- **Compatibilidad general**: el backend mantiene capas sync y async para cubrir API, tests y tareas auxiliares.
 
 ```mermaid
 flowchart LR

@@ -1,4 +1,4 @@
-from typing import List, Union, Any
+from typing import List, Union, Any, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import ValidationInfo, field_validator, model_validator
 
@@ -23,11 +23,12 @@ class Settings(BaseSettings):
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: str = "password"
     POSTGRES_DB: str = "carometro"
-    DATABASE_URL: str | None = None
+    ALLOW_SQLITE: bool = False
+    DATABASE_URL: Optional[str] = None
 
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
-    def assemble_db_connection(cls, v: str | None, info: ValidationInfo) -> Any:
+    def assemble_db_connection(cls, v: Optional[str], info: ValidationInfo) -> Any:
         if isinstance(v, (bytes, bytearray)):
             v = v.decode("utf-8", errors="ignore")
         if isinstance(v, str):
@@ -37,6 +38,9 @@ class Settings(BaseSettings):
                     env = str(info.data.get("ENV") or "").lower()
                     if env in {"prod", "production"}:
                         raise ValueError("SQLite is not supported in production. Please use PostgreSQL.")
+                    if env in {"prod", "production"}:
+                        raise ValueError("SQLite is not supported in production. Please use PostgreSQL.")
+                    return cleaned
                 return cleaned
         values = info.data
         return f"postgresql://{values.get('POSTGRES_USER')}:{values.get('POSTGRES_PASSWORD')}@{values.get('POSTGRES_SERVER')}/{values.get('POSTGRES_DB')}"
@@ -46,11 +50,11 @@ class Settings(BaseSettings):
     REDIS_PORT: int = 6379
     
     # Cloudflare R2 / S3
-    R2_BUCKET_NAME: str | None = None
-    R2_ACCOUNT_ID: str | None = None
-    R2_ACCESS_KEY_ID: str | None = None
-    R2_SECRET_ACCESS_KEY: str | None = None
-    R2_PUBLIC_DOMAIN: str | None = None # e.g. https://pub-xxx.r2.dev
+    R2_BUCKET_NAME: Optional[str] = None
+    R2_ACCOUNT_ID: Optional[str] = None
+    R2_ACCESS_KEY_ID: Optional[str] = None
+    R2_SECRET_ACCESS_KEY: Optional[str] = None
+    R2_PUBLIC_DOMAIN: Optional[str] = None # e.g. https://pub-xxx.r2.dev
 
     BACKEND_CORS_ORIGINS: List[str] = []
 
@@ -61,12 +65,13 @@ class Settings(BaseSettings):
             if v.startswith("["):
                 import json
                 try:
-                    return json.loads(v)
+                    items = json.loads(v)
                 except Exception:
-                    return [i.strip().strip('"').strip("'") for i in v.strip("[]").split(",") if i.strip().strip('"').strip("'")]
-            return [i.strip() for i in v.split(",")]
+                    items = [i.strip().strip('"').strip("'") for i in v.strip("[]").split(",") if i.strip().strip('"').strip("'")]
+                return [str(i).strip().rstrip("/") for i in items if str(i).strip()]
+            return [i.strip().rstrip("/") for i in v.split(",") if i.strip()]
         elif isinstance(v, list):
-            return v
+            return [str(i).strip().rstrip("/") for i in v if str(i).strip()]
         raise ValueError(v)
 
     model_config = SettingsConfigDict(

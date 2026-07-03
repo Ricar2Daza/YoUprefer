@@ -10,8 +10,12 @@ if isinstance(SQLALCHEMY_DATABASE_URL, (bytes, bytearray)):
 SQLALCHEMY_DATABASE_URL = str(SQLALCHEMY_DATABASE_URL).strip().strip("\ufeff")
 
 base_url = SQLALCHEMY_DATABASE_URL.split("?", 1)[0]
-if base_url.startswith("sqlite"):
-    ASYNC_SQLALCHEMY_DATABASE_URL = base_url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+is_sqlite = base_url.startswith("sqlite")
+if is_sqlite:
+    if base_url.startswith("sqlite+aiosqlite://"):
+        ASYNC_SQLALCHEMY_DATABASE_URL = base_url
+    else:
+        ASYNC_SQLALCHEMY_DATABASE_URL = base_url.replace("sqlite://", "sqlite+aiosqlite://", 1)
 else:
     ASYNC_SQLALCHEMY_DATABASE_URL = base_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
@@ -19,8 +23,8 @@ else:
 sync_connect_args = {"check_same_thread": False} if SQLALCHEMY_DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
+    pool_pre_ping=True,
     connect_args=sync_connect_args,
-    pool_pre_ping=True
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

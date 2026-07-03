@@ -7,7 +7,7 @@ from .msg import Msg, ForgotPassword, ResetPassword
 from .follow import Follow, FollowCreate, FollowStats, FollowingIds
 from .notification import Notification, NotificationUpdate, NotificationList
 from .badge import Badge, BadgeCreate, BadgeUpdate, UserBadge
-from .token import Token, TokenPayload, RefreshTokenRequest, OAuthTokenRequest
+from .token import RefreshTokenRequest, OAuthTokenRequest, SocialLoginRequest
 from .report import Report, ReportCreate
 from .comment import Comment, CommentCreate
 from .user_block import UserBlock

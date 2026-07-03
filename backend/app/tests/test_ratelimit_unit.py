@@ -1,5 +1,6 @@
 import pytest
 from jose import jwt
+from typing import Optional, Dict
 
 from app.core.config import settings
 from app.core.ratelimit import RateLimiter
@@ -66,7 +67,7 @@ class DummyClient:
 
 
 class DummyRequest:
-    def __init__(self, path: str, host: str = "127.0.0.1", headers: dict | None = None):
+    def __init__(self, path: str, host: str = "127.0.0.1", headers: Optional[Dict] = None):
         self.url = DummyUrl(path)
         self.client = DummyClient(host)
         self.headers = headers or {}

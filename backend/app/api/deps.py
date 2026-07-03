@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Generator, AsyncGenerator, Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
@@ -13,6 +14,9 @@ from app.db.session import get_db, get_async_db
 from app.core.redis_client import redis_client
 
 reusable_oauth2 = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login/access-token")
+reusable_oauth2 = OAuth2PasswordBearer(
+    tokenUrl=f"{settings.API_V1_STR}/auth/login/access-token"
+)
 
 def get_current_user(
     db: Session = Depends(get_db), token: str = Depends(reusable_oauth2)
@@ -99,7 +103,7 @@ async def get_current_user_async(
 
 def get_current_user_optional(
     db: Session = Depends(get_db), token: str = Depends(OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login/access-token", auto_error=False))
-) -> models.User | None:
+) -> Optional[models.User]:
     if not token:
         return None
     try:
@@ -115,7 +119,7 @@ def get_current_user_optional(
 
 async def get_current_user_optional_async(
     db: AsyncSession = Depends(get_async_db), token: str = Depends(OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login/access-token", auto_error=False))
-) -> models.User | None:
+) -> Optional[models.User]:
     if not token:
         return None
     try:

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 
 
@@ -7,7 +7,7 @@ class Notification(BaseModel):
     id: int
     user_id: int
     type: str
-    payload: dict[str, Any]
+    payload: Dict[str, Any]
     is_read: bool
     created_at: datetime
 
@@ -16,11 +16,11 @@ class Notification(BaseModel):
 
 
 class NotificationUpdate(BaseModel):
-    is_read: bool | None = None
+    is_read: Optional[bool] = None
 
 
 class NotificationList(BaseModel):
-    items: list[Notification]
+    items: List[Notification]
     total: int
     limit: int
     offset: int

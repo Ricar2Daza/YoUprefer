@@ -18,3 +18,4 @@ httpx
 pytest-asyncio
 aiosqlite
 asyncpg
+fakeredis

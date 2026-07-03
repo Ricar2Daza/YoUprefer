@@ -7,7 +7,6 @@ from jose import JWTError, jwt
 from pydantic import ValidationError
 import uuid
 import httpx
-
 from app import schemas, models
 from app.api import deps
 from app.core import security
