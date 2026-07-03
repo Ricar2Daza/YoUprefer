@@ -1,11 +1,16 @@
 import pytest
+import json
 from httpx import AsyncClient
+from fastapi.testclient import TestClient
 from app.core.config import settings
+from app.core.security import create_access_token
+from app.core.redis_client import redis_client
 from app.models.profile import Profile, ProfileType, Gender
 from app.models.user import User
 from app.models.category import Category
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from app.main import app
 
 # Integration Test
 @pytest.mark.asyncio
@@ -108,3 +113,15 @@ async def test_full_integration_flow(client: AsyncClient, db: AsyncSession):
     cats = r.json()
     assert len(cats) >= 1
     assert cats[0]["slug"] == "general"
+
+
+def test_realtime_notifications_websocket_delivers_pubsub_event():
+    token = create_access_token("1")
+    payload = {"type": "direct_message", "payload": {"from_user_id": 2}}
+    message = json.dumps(payload)
+
+    with TestClient(app) as c:
+        with c.websocket_connect(f"{settings.API_V1_STR}/ws/notifications?token={token}") as ws:
+            redis_client.publish("notifications:1", message)
+            received = ws.receive_text()
+            assert json.loads(received) == payload

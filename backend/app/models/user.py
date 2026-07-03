@@ -9,13 +9,47 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     full_name = Column(String)
     avatar_url = Column(String, nullable=True)
+    bio = Column(String, nullable=True)
     is_active = Column(Boolean(), default=True)
     is_superuser = Column(Boolean(), default=False)
+    is_banned = Column(Boolean(), default=False)
+    banned_until = Column(DateTime(timezone=True), nullable=True)
+    ban_reason = Column(String, nullable=True)
     
     profiles = relationship("Profile", back_populates="owner", cascade="all, delete-orphan")
     badges = relationship("UserBadge", back_populates="user")
     votes_cast = relationship("Vote", backref="voter", lazy="dynamic")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
+    blocks_outgoing = relationship(
+        "UserBlock",
+        foreign_keys="UserBlock.blocker_id",
+        back_populates="blocker",
+        cascade="all, delete-orphan",
+    )
+    blocks_incoming = relationship(
+        "UserBlock",
+        foreign_keys="UserBlock.blocked_id",
+        back_populates="blocked",
+        cascade="all, delete-orphan",
+    )
+    messages_sent = relationship(
+        "DirectMessage",
+        foreign_keys="DirectMessage.sender_id",
+        back_populates="sender",
+        cascade="all, delete-orphan",
+    )
+    messages_received = relationship(
+        "DirectMessage",
+        foreign_keys="DirectMessage.recipient_id",
+        back_populates="recipient",
+        cascade="all, delete-orphan",
+    )
+    custom_votes_created = relationship(
+        "CustomVote",
+        foreign_keys="CustomVote.owner_id",
+        back_populates="owner",
+        cascade="all, delete-orphan",
+    )
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

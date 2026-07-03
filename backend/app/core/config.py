@@ -1,8 +1,9 @@
 from typing import List, Union, Any
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import AnyHttpUrl, ValidationInfo, field_validator
+from pydantic import ValidationInfo, field_validator, model_validator
 
 class Settings(BaseSettings):
+    ENV: str = "development"
     PROJECT_NAME: str = "YoUprefer"
     VERSION: str = "1.0.0"
     API_V1_STR: str = "/api/v1"
@@ -10,6 +11,12 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30 # 30 días
     SECRET_KEY: str = "super-secret-key-change-this-in-env" # Cambiar esto en producción
     ALGORITHM: str = "HS256"
+
+    @model_validator(mode="after")
+    def validate_production_secrets(self) -> "Settings":
+        if self.ENV.lower() in {"prod", "production"} and self.SECRET_KEY == "super-secret-key-change-this-in-env":
+            raise ValueError("SECRET_KEY must be set in production")
+        return self
     
     # Base de Datos
     POSTGRES_SERVER: str = "localhost"
@@ -27,7 +34,9 @@ class Settings(BaseSettings):
             cleaned = v.strip().strip("\ufeff").strip('"').strip("'")
             if cleaned:
                 if cleaned.startswith("sqlite"):
-                    raise ValueError("SQLite is not supported. Please use PostgreSQL.")
+                    env = str(info.data.get("ENV") or "").lower()
+                    if env in {"prod", "production"}:
+                        raise ValueError("SQLite is not supported in production. Please use PostgreSQL.")
                 return cleaned
         values = info.data
         return f"postgresql://{values.get('POSTGRES_USER')}:{values.get('POSTGRES_PASSWORD')}@{values.get('POSTGRES_SERVER')}/{values.get('POSTGRES_DB')}"
@@ -43,7 +52,7 @@ class Settings(BaseSettings):
     R2_SECRET_ACCESS_KEY: str | None = None
     R2_PUBLIC_DOMAIN: str | None = None # e.g. https://pub-xxx.r2.dev
 
-    BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = []
+    BACKEND_CORS_ORIGINS: List[str] = []
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod

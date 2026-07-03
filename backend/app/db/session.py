@@ -9,13 +9,17 @@ if isinstance(SQLALCHEMY_DATABASE_URL, (bytes, bytearray)):
     SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.decode("utf-8", errors="ignore")
 SQLALCHEMY_DATABASE_URL = str(SQLALCHEMY_DATABASE_URL).strip().strip("\ufeff")
 
-# Configurar URL asíncrona para PostgreSQL
 base_url = SQLALCHEMY_DATABASE_URL.split("?", 1)[0]
-ASYNC_SQLALCHEMY_DATABASE_URL = base_url.replace("postgresql://", "postgresql+asyncpg://")
+if base_url.startswith("sqlite"):
+    ASYNC_SQLALCHEMY_DATABASE_URL = base_url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+else:
+    ASYNC_SQLALCHEMY_DATABASE_URL = base_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 # Motor Síncrono
+sync_connect_args = {"check_same_thread": False} if SQLALCHEMY_DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
+    connect_args=sync_connect_args,
     pool_pre_ping=True
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -27,9 +31,11 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 async_engine = None
 AsyncSessionLocal = None
 try:
+    async_connect_args = {"check_same_thread": False} if ASYNC_SQLALCHEMY_DATABASE_URL.startswith("sqlite") else {}
     async_engine = create_async_engine(
         ASYNC_SQLALCHEMY_DATABASE_URL,
         echo=False,
+        connect_args=async_connect_args,
     )
     AsyncSessionLocal = sessionmaker(
         async_engine,

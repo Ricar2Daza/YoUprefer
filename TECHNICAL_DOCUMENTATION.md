@@ -4,18 +4,51 @@
 YoUprefer (anteriormente Carómetro) es una plataforma de votación social basada en comparaciones directas (pairwise ranking) al estilo Elo. Los usuarios suben fotos ("perfiles") para competir en rankings globales o categorizados. El sistema incluye gamificación (insignias), notificaciones en tiempo real y gestión de usuarios.
 
 ## 2. Arquitectura del Sistema
-- **Backend**: Python 3.14 + FastAPI (Async).
-- **Frontend**: Next.js 14 (App Router) + Tailwind CSS.
-- **Base de Datos**: PostgreSQL + SQLAlchemy (Async ORM) + Alembic.
-- **Caché/Session**: Redis (gestión de tokens y blacklist).
-- **Almacenamiento**: Cloudfare R2 para imágenes.
+- **Backend**: Python 3.14 + FastAPI (Async) + SQLAlchemy + Alembic.
+- **Frontend**: Next.js 16 (App Router) + Tailwind CSS.
+- **App móvil**: Expo (React Native) + Expo Router.
+- **Base de Datos**: PostgreSQL en producción; SQLite habilitado para desarrollo/pruebas (bloqueado en producción).
+- **Tiempo real y tokens**: Redis (pub/sub para notificaciones + revocación/blacklist de tokens).
+- **Almacenamiento**: Cloudflare R2 / S3-compatible (opcional; configurable por variables de entorno).
+
+```mermaid
+flowchart LR
+  FE[Frontend\nNext.js] -->|REST /api/v1\nJWT (access/refresh)| API[Backend\nFastAPI]
+  MO[Mobile\nExpo] -->|REST /api/v1\nJWT (access/refresh)| API
+  FE -->|WS /api/v1/ws/notifications\n?token=...| WS[WebSocket\nNotifications]
+  MO -->|WS /api/v1/ws/notifications\n?token=...| WS
+  API --> DB[(DB\nPostgreSQL / SQLite)]
+  API --> R[(Redis)]
+  API --> S[(R2 / S3\nImages)]
+  R --> WS
+```
+
+## 2.1. Integración Entre Plataformas
+
+### Configuración de URLs
+- **Backend**: prefijo común `API_V1_STR=/api/v1`.
+- **Frontend**: `NEXT_PUBLIC_API_URL` (por defecto `http://127.0.0.1:8000/api/v1`).
+- **Mobile**: `EXPO_PUBLIC_API_URL` (por defecto `http://10.0.2.2:8000/api/v1` en Android emulator; `http://localhost:8000/api/v1` en web).
+- **WebSocket**: se deriva reemplazando `http`→`ws` y usando `/ws/notifications?token=...`.
+
+### Autenticación JWT (Access + Refresh)
+- **Login**: `POST /auth/login/access-token` devuelve `access_token` y `refresh_token`.
+- **Refresh**: `POST /auth/refresh-token` rota/renueva tokens.
+- **Logout**: `POST /auth/logout` revoca el `refresh_token` (blacklist en Redis).
+- **Clientes**:
+  - Frontend: refresco proactivo cerca del vencimiento y conexión a WS al iniciar sesión.
+  - Mobile: refresh automático ante 401, con reintentos/timeout y reconexión de WS.
+
+### Tiempo Real (Notificaciones)
+- **Servidor**: WS suscribe a `notifications:{user_id}` en Redis y reenvía los mensajes como texto (JSON).
+- **Clientes**: parsean JSON y actualizan contadores/estado local (y también disparan eventos de UI donde aplica).
 
 ## 3. Módulos del Sistema Existentes
 
 ### 3.1. Autenticación (`auth`)
 - **Funcionalidad**: Registro, Login (OAuth2 Password Bearer), Refresh Token, Logout (Blacklist en Redis), Recuperación de contraseña.
 - **Tecnologías**: JWT (HS256), Passlib (pbkdf2_sha256), Redis.
-- **Seguridad**: Hashing seguro, expiración corta de access tokens (30 min), revocación mediante blacklist.
+- **Seguridad**: Hashing seguro, expiración configurable de access tokens, revocación mediante blacklist.
 
 ### 3.2. Gestión de Usuarios (`users`)
 - **Funcionalidad**: Perfil básico, Seguir/Dejar de seguir, Listado de seguidores/siguiendo.
@@ -98,8 +131,7 @@ A continuación se detallan los módulos solicitados y recientemente implementad
 6.  **Reporte de Usuarios**: Sistema para reportar contenido inapropiado.
 
 ### Nivel Alto
-7.  **App Móvil Nativa (React Native)**: Portar la experiencia a iOS/Android.
-    - *Req*: API REST ya existente facilita esto, pero requiere desarrollo de UI nativa.
+7.  **App Móvil (Expo/React Native)**: Implementada con Expo Router y cliente API con refresh token + reconexión de tiempo real.
 8.  **Chat en Tiempo Real**: Mensajería directa entre usuarios que se siguen.
     - *Req*: WebSockets (Socket.io o FastAPI WebSockets), persistencia de mensajes (MongoDB/Postgres).
 9.  **Sistema de Torneos**: Eventos temporales con reglas específicas y premios únicos.
@@ -142,7 +174,7 @@ A continuación se detallan los módulos solicitados y recientemente implementad
   - Claims obligatorios (`sub`, `type`, `exp`) en access/refresh tokens.
   - Casos: [test_security_unit.py](file:///c:/Users/Usuario/Desktop/Carometro/backend/app/tests/test_security_unit.py)
 - Configuración:
-  - Sanitización de `DATABASE_URL` (comillas/BOM) y rechazo de SQLite en runtime.
+  - Sanitización de `DATABASE_URL` (comillas/BOM) y rechazo de SQLite en producción.
   - Parseo de CORS desde string JSON.
   - Casos: [test_config_unit.py](file:///c:/Users/Usuario/Desktop/Carometro/backend/app/tests/test_config_unit.py)
 - Rate limit:
@@ -176,6 +208,9 @@ A continuación se detallan los módulos solicitados y recientemente implementad
   - Casos: [test_auth.py](file:///c:/Users/Usuario/Desktop/Carometro/backend/app/tests/test_auth.py)
 - Flujo completo (MVP):
   - Registro/Inicio de sesión → obtención de par → voto → verificación de categorías.
+  - Casos: [test_integration_flow.py](file:///c:/Users/Usuario/Desktop/Carometro/backend/app/tests/test_integration_flow.py)
+- Tiempo real (WebSocket + Redis pub/sub):
+  - Conexión a `/ws/notifications` con JWT y recepción de eventos publicados en Redis.
   - Casos: [test_integration_flow.py](file:///c:/Users/Usuario/Desktop/Carometro/backend/app/tests/test_integration_flow.py)
 - Participación/subida:
   - Subida de perfil → participación activa → restricciones de re-subida.

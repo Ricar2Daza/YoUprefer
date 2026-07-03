@@ -24,6 +24,24 @@ def init_categories(db: Session):
     else:
         print("La categoría 'General' ya existe.")
 
+    defaults = [
+        ("Outfits", "outfits", "Votaciones de outfits y estilo."),
+        ("Calidad de la foto", "calidad-foto", "Calidad técnica y composición."),
+        ("Música", "musica", "Opiniones y rankings de música."),
+        ("Película", "pelicula", "Opiniones y rankings de películas."),
+        ("Libro", "libro", "Opiniones y rankings de libros."),
+        ("Poesía", "poesia", "Opiniones y rankings de poesía."),
+        ("La más bella", "la-mas-bella", "Belleza general."),
+        ("Tecnología", "tecnologia", "Tecnología y gadgets."),
+        ("Belleza", "belleza", "Cuidado personal y estética."),
+    ]
+
+    for name, slug, desc in defaults:
+        existing = db.query(Category).filter(Category.slug == slug).first()
+        if not existing:
+            db.add(Category(name=name, slug=slug, description=desc, is_active=True))
+    db.commit()
+
     # Asignar todos los perfiles sin categoría a General
     profiles = db.query(Profile).filter(Profile.category_id == None).all()
     count = 0

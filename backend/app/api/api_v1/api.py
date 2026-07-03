@@ -9,6 +9,8 @@ from app.api.api_v1.endpoints import (
     notifications,
     badges,
     reports,
+    messages,
+    custom_votes,
 )
 
 api_router = APIRouter()
@@ -21,3 +23,5 @@ api_router.include_router(categories.router, prefix="/categories", tags=["catego
 api_router.include_router(notifications.router, tags=["notifications"])
 api_router.include_router(badges.router, prefix="/badges", tags=["badges"])
 api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
+api_router.include_router(messages.router, tags=["messages"])
+api_router.include_router(custom_votes.router, tags=["custom-votes"])

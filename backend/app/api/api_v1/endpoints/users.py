@@ -3,12 +3,13 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func
+from sqlalchemy import func, or_, and_
 
 from app import models, schemas
 from app.api import deps
 from app.core.redis_client import redis_client
 from app.services.storage import storage_service
+from app.core.moderation import validate_text
 import uuid
 
 router = APIRouter()
@@ -26,6 +27,40 @@ async def _get_follow_counts(db: AsyncSession, user_id: int) -> tuple[int, int]:
     following_count = following_result.scalar() or 0
 
     return follower_count, following_count
+
+
+async def _is_blocked(db: AsyncSession, a: int, b: int) -> bool:
+    result = await db.execute(
+        select(models.UserBlock.id).filter(
+            or_(
+                and_(models.UserBlock.blocker_id == a, models.UserBlock.blocked_id == b),
+                and_(models.UserBlock.blocker_id == b, models.UserBlock.blocked_id == a),
+            )
+        )
+    )
+    return result.scalars().first() is not None
+
+
+def _is_online(user_id: int) -> bool:
+    if not redis_client:
+        return False
+    try:
+        return bool(redis_client.get(f"online:{user_id}"))
+    except Exception:
+        return False
+
+
+async def _mutual_following_count(db: AsyncSession, a: int, b: int) -> int:
+    f1 = models.Follow
+    from sqlalchemy.orm import aliased
+    f2 = aliased(models.Follow)
+    result = await db.execute(
+        select(func.count(f1.following_id))
+        .select_from(f1)
+        .join(f2, and_(f1.following_id == f2.following_id))
+        .filter(f1.follower_id == a, f2.follower_id == b)
+    )
+    return int(result.scalar() or 0)
 
 
 @router.get("/me", response_model=schemas.User)
@@ -61,12 +96,15 @@ async def read_user_me(
         email=current_user.email,
         full_name=current_user.full_name,
         avatar_url=current_user.avatar_url,
+        bio=current_user.bio,
         is_active=current_user.is_active,
         is_superuser=current_user.is_superuser,
         votes_cast_count=votes_count,
         badges=badges,
         follower_count=follower_count,
         following_count=following_count,
+        mutual_following_count=0,
+        is_online=True,
     )
 
 
@@ -129,12 +167,15 @@ async def upload_user_avatar(
         email=current_user.email,
         full_name=current_user.full_name,
         avatar_url=current_user.avatar_url,
+        bio=current_user.bio,
         is_active=current_user.is_active,
         is_superuser=current_user.is_superuser,
         votes_cast_count=votes_count,
         badges=badges,
         follower_count=follower_count,
         following_count=following_count,
+        mutual_following_count=0,
+        is_online=True,
     )
 
 
@@ -159,6 +200,20 @@ async def update_user_me(
         from app.core import security
 
         update_data["hashed_password"] = security.get_password_hash(update_data.pop("password"))
+
+    if "full_name" in update_data:
+        try:
+            validate_text(update_data.get("full_name"), fields=("nombre",))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    if "bio" in update_data:
+        bio = update_data.get("bio")
+        if bio is not None and len(bio) > 500:
+            raise HTTPException(status_code=400, detail="La biografía es demasiado larga")
+        try:
+            validate_text(bio, fields=("biografía",))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
     for field, value in update_data.items():
         setattr(current_user, field, value)
@@ -195,12 +250,117 @@ async def update_user_me(
         email=current_user.email,
         full_name=current_user.full_name,
         avatar_url=current_user.avatar_url,
+        bio=current_user.bio,
         is_active=current_user.is_active,
         is_superuser=current_user.is_superuser,
         votes_cast_count=votes_count,
         badges=badges,
         follower_count=follower_count,
         following_count=following_count,
+        mutual_following_count=0,
+        is_online=True,
+    )
+
+
+@router.get("/search", response_model=List[schemas.UserPublicProfile])
+async def search_users(
+    q: str,
+    limit: int = 20,
+    db: AsyncSession = Depends(deps.get_async_db),
+    current_user: models.User | None = Depends(deps.get_current_user_optional_async),
+) -> Any:
+    query = (q or "").strip()
+    if not query:
+        return []
+    if limit <= 0:
+        limit = 20
+    if limit > 50:
+        limit = 50
+    result = await db.execute(
+        select(models.User)
+        .filter(models.User.is_active == True)
+        .filter(or_(models.User.full_name.ilike(f"%{query}%"), models.User.email.ilike(f"%{query}%")))
+        .limit(limit)
+    )
+    users = result.scalars().all()
+
+    items: list[schemas.UserPublicProfile] = []
+    for u in users:
+        follower_count, following_count = await _get_follow_counts(db, u.id)
+        mutual = 0
+        is_blocked_by_me = False
+        has_blocked_me = False
+        if current_user:
+            mutual = await _mutual_following_count(db, current_user.id, u.id)
+            is_blocked_by_me = await _is_blocked(db, current_user.id, u.id)
+            has_blocked_me = await _is_blocked(db, u.id, current_user.id)
+
+        cv_count_result = await db.execute(select(func.count(models.CustomVote.id)).filter(models.CustomVote.owner_id == u.id, models.CustomVote.is_active == True))
+        custom_votes_created_count = int(cv_count_result.scalar() or 0)
+
+        items.append(
+            schemas.UserPublicProfile(
+                id=u.id,
+                email=u.email,
+                full_name=u.full_name,
+                avatar_url=u.avatar_url,
+                bio=u.bio,
+                is_active=u.is_active,
+                is_superuser=u.is_superuser,
+                votes_cast_count=0,
+                badges=[],
+                follower_count=follower_count,
+                following_count=following_count,
+                mutual_following_count=mutual,
+                is_online=_is_online(u.id),
+                is_blocked_by_me=is_blocked_by_me,
+                has_blocked_me=has_blocked_me,
+                custom_votes_created_count=custom_votes_created_count,
+            )
+        )
+    return items
+
+
+@router.get("/{user_id}", response_model=schemas.UserPublicProfile)
+async def get_user_profile(
+    user_id: int,
+    db: AsyncSession = Depends(deps.get_async_db),
+    current_user: models.User | None = Depends(deps.get_current_user_optional_async),
+) -> Any:
+    result = await db.execute(select(models.User).filter(models.User.id == user_id, models.User.is_active == True))
+    u = result.scalars().first()
+    if not u:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    follower_count, following_count = await _get_follow_counts(db, u.id)
+    mutual = 0
+    is_blocked_by_me = False
+    has_blocked_me = False
+    if current_user:
+        mutual = await _mutual_following_count(db, current_user.id, u.id)
+        is_blocked_by_me = await _is_blocked(db, current_user.id, u.id)
+        has_blocked_me = await _is_blocked(db, u.id, current_user.id)
+
+    cv_count_result = await db.execute(select(func.count(models.CustomVote.id)).filter(models.CustomVote.owner_id == u.id, models.CustomVote.is_active == True))
+    custom_votes_created_count = int(cv_count_result.scalar() or 0)
+
+    return schemas.UserPublicProfile(
+        id=u.id,
+        email=u.email,
+        full_name=u.full_name,
+        avatar_url=u.avatar_url,
+        bio=u.bio,
+        is_active=u.is_active,
+        is_superuser=u.is_superuser,
+        votes_cast_count=0,
+        badges=[],
+        follower_count=follower_count,
+        following_count=following_count,
+        mutual_following_count=mutual,
+        is_online=_is_online(u.id),
+        is_blocked_by_me=is_blocked_by_me,
+        has_blocked_me=has_blocked_me,
+        custom_votes_created_count=custom_votes_created_count,
     )
 
 
@@ -237,6 +397,8 @@ async def follow_user(
     target_user = result.scalars().first()
     if not target_user or not target_user.is_active:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    if await _is_blocked(db, current_user.id, user_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Acción no permitida")
 
     existing_result = await db.execute(
         select(models.Follow).filter(
@@ -305,6 +467,104 @@ async def unfollow_user(
         await db.commit()
 
     return {"detail": "unfollowed"}
+
+
+@router.get("/me/blocks", response_model=List[schemas.UserPublicProfile])
+async def list_my_blocks(
+    db: AsyncSession = Depends(deps.get_async_db),
+    current_user: models.User = Depends(deps.get_current_user_async),
+) -> Any:
+    result = await db.execute(
+        select(models.User)
+        .join(models.UserBlock, models.UserBlock.blocked_id == models.User.id)
+        .filter(models.UserBlock.blocker_id == current_user.id, models.User.is_active == True)
+    )
+    blocked_users = result.scalars().all()
+    items: list[schemas.UserPublicProfile] = []
+    for u in blocked_users:
+        follower_count, following_count = await _get_follow_counts(db, u.id)
+        items.append(
+            schemas.UserPublicProfile(
+                id=u.id,
+                email=u.email,
+                full_name=u.full_name,
+                avatar_url=u.avatar_url,
+                bio=u.bio,
+                is_active=u.is_active,
+                is_superuser=u.is_superuser,
+                votes_cast_count=0,
+                badges=[],
+                follower_count=follower_count,
+                following_count=following_count,
+                mutual_following_count=0,
+                is_online=_is_online(u.id),
+                is_blocked_by_me=True,
+                has_blocked_me=False,
+                custom_votes_created_count=0,
+            )
+        )
+    return items
+
+
+@router.post("/{user_id}/block", response_model=schemas.UserBlock, status_code=status.HTTP_201_CREATED)
+async def block_user(
+    user_id: int,
+    db: AsyncSession = Depends(deps.get_async_db),
+    current_user: models.User = Depends(deps.get_current_user_async),
+) -> Any:
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="No puedes bloquearte a ti mismo")
+    target_result = await db.execute(select(models.User).filter(models.User.id == user_id, models.User.is_active == True))
+    target = target_result.scalars().first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    existing_result = await db.execute(
+        select(models.UserBlock).filter(models.UserBlock.blocker_id == current_user.id, models.UserBlock.blocked_id == user_id)
+    )
+    existing = existing_result.scalars().first()
+    if existing:
+        return existing
+
+    block = models.UserBlock(blocker_id=current_user.id, blocked_id=user_id)
+    db.add(block)
+
+    await db.execute(
+        select(models.Follow).filter(
+            or_(
+                and_(models.Follow.follower_id == current_user.id, models.Follow.following_id == user_id),
+                and_(models.Follow.follower_id == user_id, models.Follow.following_id == current_user.id),
+            )
+        )
+    )
+    await db.execute(
+        models.Follow.__table__.delete().where(
+            or_(
+                and_(models.Follow.follower_id == current_user.id, models.Follow.following_id == user_id),
+                and_(models.Follow.follower_id == user_id, models.Follow.following_id == current_user.id),
+            )
+        )
+    )
+
+    await db.commit()
+    await db.refresh(block)
+    return block
+
+
+@router.delete("/{user_id}/block")
+async def unblock_user(
+    user_id: int,
+    db: AsyncSession = Depends(deps.get_async_db),
+    current_user: models.User = Depends(deps.get_current_user_async),
+) -> Any:
+    result = await db.execute(
+        select(models.UserBlock).filter(models.UserBlock.blocker_id == current_user.id, models.UserBlock.blocked_id == user_id)
+    )
+    block = result.scalars().first()
+    if block:
+        await db.delete(block)
+        await db.commit()
+    return {"detail": "unblocked"}
 
 
 @router.get("/{user_id}/followers", response_model=List[schemas.User])

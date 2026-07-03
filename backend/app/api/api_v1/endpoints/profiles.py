@@ -14,7 +14,9 @@ from app.api.deps import get_async_db
 from app.models.profile import Profile, ProfileType, Gender
 from app.models.comment import Comment
 from app.services.storage import storage_service
+from app.services.season_service import season_service
 from app.core.redis_client import redis_client
+from app.core.moderation import validate_text
 import logging
 
 logger = logging.getLogger(__name__)
@@ -128,6 +130,37 @@ async def get_random_pair(
     profiles = result.scalars().all()
 
     return profiles
+
+
+@router.get("/recommendations", response_model=List[schemas.Profile])
+async def recommend_profiles(
+    limit: int = 20,
+    category_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_async_db),
+    current_user: Optional[models.User] = Depends(deps.get_current_user_optional_async),
+) -> Any:
+    await season_service.ensure_season_current(db)
+    if limit <= 0:
+        limit = 20
+    if limit > 50:
+        limit = 50
+    query = select(Profile).filter(Profile.is_active == True, Profile.is_approved == True)
+    if category_id:
+        query = query.filter(Profile.category_id == category_id)
+    if current_user:
+        from app.models.vote import Vote
+        voted_rows = await db.execute(select(Vote.winner_id, Vote.loser_id).filter(Vote.voter_id == current_user.id))
+        excluded: set[int] = set()
+        for w, l in voted_rows.all():
+            excluded.add(w)
+            excluded.add(l)
+        excluded_profiles = excluded
+        if excluded_profiles:
+            query = query.filter(Profile.id.notin_(excluded_profiles))
+        query = query.filter(Profile.user_id != current_user.id)
+    query = query.order_by(func.random()).limit(limit)
+    result = await db.execute(query)
+    return result.scalars().all()
 
 @router.post("/", response_model=Any)
 async def create_profile(
@@ -343,6 +376,12 @@ async def get_ranking(
     """
     Obtener los perfiles mejor calificados.
     """
+    await season_service.ensure_season_current(db)
+    if limit <= 0:
+        limit = 50
+    if limit > 50:
+        limit = 50
+
     # Generación de clave de caché
     cache_key = f"ranking:{type}:{gender}:{category_id}:{limit}"
     
@@ -467,6 +506,10 @@ async def add_profile_comment(
         raise HTTPException(status_code=400, detail="El comentario no puede estar vacío")
     if len(content) > 500:
         raise HTTPException(status_code=400, detail="El comentario es demasiado largo")
+    try:
+        validate_text(content, fields=("comentario",))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     db_obj = Comment(profile_id=id, user_id=current_user.id, content=content)
     db.add(db_obj)

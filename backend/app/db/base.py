@@ -10,3 +10,6 @@ from app.models.notification import Notification  # noqa
 from app.models.badge import Badge, UserBadge  # noqa
 from app.models.report import Report  # noqa
 from app.models.comment import Comment  # noqa
+from app.models.user_block import UserBlock  # noqa
+from app.models.direct_message import DirectMessage  # noqa
+from app.models.custom_vote import CustomVote, CustomVoteParticipant, CustomVotePhoto, CustomVoteBallot  # noqa

@@ -2,6 +2,7 @@ from typing import Any, List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import or_
 
 from app import models, schemas
 from app.api import deps
@@ -13,12 +14,16 @@ router = APIRouter()
 async def read_categories(
     skip: int = 0,
     limit: int = 100,
+    q: str | None = None,
     db: AsyncSession = Depends(deps.get_async_db),
 ):
     """
     Retrieve categories.
     """
-    result = await db.execute(select(Category).filter(Category.is_active == True).offset(skip).limit(limit))
+    query = select(Category).filter(Category.is_active == True)
+    if q:
+        query = query.filter(or_(Category.name.ilike(f"%{q}%"), Category.slug.ilike(f"%{q}%")))
+    result = await db.execute(query.offset(skip).limit(limit))
     categories = result.scalars().all()
     return categories
 
@@ -48,4 +53,3 @@ async def create_category(
     await db.commit()
     await db.refresh(category)
     return category
-

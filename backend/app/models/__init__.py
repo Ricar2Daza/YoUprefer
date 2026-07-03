@@ -7,3 +7,6 @@ from .follow import Follow
 from .notification import Notification
 from .report import Report, ReportStatus
 from .comment import Comment
+from .user_block import UserBlock
+from .direct_message import DirectMessage
+from .custom_vote import CustomVote, CustomVoteParticipant, CustomVotePhoto, CustomVoteBallot

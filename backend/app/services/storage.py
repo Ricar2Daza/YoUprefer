@@ -62,4 +62,18 @@ class StorageService:
             print(f"Error subiendo a R2: {e}")
             return False
 
+    def delete_file(self, object_name: str) -> bool:
+        if not object_name:
+            return True
+        if not self.s3_client:
+            return True
+        try:
+            self.s3_client.delete_object(
+                Bucket=settings.R2_BUCKET_NAME,
+                Key=object_name,
+            )
+            return True
+        except Exception:
+            return False
+
 storage_service = StorageService()

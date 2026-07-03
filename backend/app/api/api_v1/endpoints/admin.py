@@ -1,8 +1,9 @@
-from typing import Any, List
-from datetime import datetime
+from typing import Any, List, Optional
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from pydantic import BaseModel
 
 from app import models, schemas
 from app.api import deps
@@ -19,6 +20,11 @@ def check_admin(current_user: models.User = Depends(deps.get_current_user_async)
             detail="The user doesn't have enough privileges"
         )
     return current_user
+
+
+class BanRequest(BaseModel):
+    days: Optional[int] = None
+    reason: Optional[str] = None
 
 @router.get("/pending", response_model=List[schemas.Profile])
 async def get_pending_profiles(
@@ -93,6 +99,48 @@ async def reset_season(
     next_season_name = f"Season_{datetime.now().strftime('%Y_%m_%d_%H%M')}"
     winners = await season_service.async_reset_rankings_and_award_badges(db, next_season_name)
     return winners
+
+
+@router.post("/users/{user_id}/ban")
+async def ban_user(
+    user_id: int,
+    payload: BanRequest,
+    db: AsyncSession = Depends(deps.get_async_db),
+    admin_user: models.User = Depends(check_admin),
+) -> Any:
+    result = await db.execute(select(models.User).filter(models.User.id == user_id))
+    u = result.scalars().first()
+    if not u:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    u.is_banned = True
+    u.ban_reason = payload.reason
+    if payload.days is None:
+        u.banned_until = None
+    else:
+        if payload.days <= 0:
+            raise HTTPException(status_code=400, detail="days inválido")
+        u.banned_until = datetime.now(timezone.utc) + timedelta(days=payload.days)
+    db.add(u)
+    await db.commit()
+    return {"detail": "ok"}
+
+
+@router.post("/users/{user_id}/unban")
+async def unban_user(
+    user_id: int,
+    db: AsyncSession = Depends(deps.get_async_db),
+    admin_user: models.User = Depends(check_admin),
+) -> Any:
+    result = await db.execute(select(models.User).filter(models.User.id == user_id))
+    u = result.scalars().first()
+    if not u:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    u.is_banned = False
+    u.banned_until = None
+    u.ban_reason = None
+    db.add(u)
+    await db.commit()
+    return {"detail": "ok"}
 
 @router.delete("/comments/{comment_id}", status_code=status.HTTP_200_OK)
 async def delete_comment(

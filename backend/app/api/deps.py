@@ -1,35 +1,18 @@
-from typing import Generator, AsyncGenerator
+from datetime import datetime, timezone
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import jwt
+from jose import JWTError, jwt
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app import models, schemas
-from app.core import security
 from app.core.config import settings
-from app.db.session import SessionLocal, AsyncSessionLocal
+from app.db.session import get_db, get_async_db
 from app.core.redis_client import redis_client
 
-reusable_oauth2 = OAuth2PasswordBearer(
-    tokenUrl=f"{settings.API_V1_STR}/auth/login/access-token"
-)
-
-def get_db() -> Generator:
-    try:
-        db = SessionLocal()
-        yield db
-    finally:
-        db.close()
-
-async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
+reusable_oauth2 = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login/access-token")
 
 def get_current_user(
     db: Session = Depends(get_db), token: str = Depends(reusable_oauth2)
@@ -55,7 +38,7 @@ def get_current_user(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Tipo de token inválido",
             )
-    except (jwt.JWTError, ValidationError):
+    except (JWTError, ValidationError):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No se pudieron validar las credenciales",
@@ -63,6 +46,13 @@ def get_current_user(
     user = db.query(models.User).filter(models.User.id == token_data.sub).first()
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    if user.is_banned and (user.banned_until is None or user.banned_until > datetime.now(timezone.utc)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario restringido")
+    if redis_client:
+        try:
+            redis_client.setex(f"online:{user.id}", 120, "1")
+        except Exception:
+            pass
     return user
 
 async def get_current_user_async(
@@ -88,7 +78,7 @@ async def get_current_user_async(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Tipo de token inválido",
             )
-    except (jwt.JWTError, ValidationError):
+    except (JWTError, ValidationError):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No se pudieron validar las credenciales",
@@ -98,6 +88,13 @@ async def get_current_user_async(
     user = result.scalars().first()
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    if user.is_banned and (user.banned_until is None or user.banned_until > datetime.now(timezone.utc)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario restringido")
+    if redis_client:
+        try:
+            redis_client.setex(f"online:{user.id}", 120, "1")
+        except Exception:
+            pass
     return user
 
 def get_current_user_optional(
@@ -110,7 +107,7 @@ def get_current_user_optional(
             token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
         )
         token_data = schemas.TokenPayload(**payload)
-    except (jwt.JWTError, ValidationError):
+    except (JWTError, ValidationError):
         return None
         
     user = db.query(models.User).filter(models.User.id == token_data.sub).first()
@@ -126,7 +123,7 @@ async def get_current_user_optional_async(
             token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
         )
         token_data = schemas.TokenPayload(**payload)
-    except (jwt.JWTError, ValidationError):
+    except (JWTError, ValidationError):
         return None
         
     result = await db.execute(select(models.User).filter(models.User.id == token_data.sub))

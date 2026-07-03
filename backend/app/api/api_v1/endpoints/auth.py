@@ -3,14 +3,17 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from jose import jwt
+from jose import JWTError, jwt
 from pydantic import ValidationError
+import uuid
+import httpx
 
 from app import schemas, models
 from app.api import deps
 from app.core import security
 from app.core.config import settings
 from app.core.redis_client import redis_client
+from app.core.moderation import validate_text
 
 router = APIRouter()
 
@@ -145,6 +148,105 @@ async def register_user(
     db.refresh(user)
     return user
 
+
+@router.post("/oauth/google", response_model=schemas.Token)
+async def oauth_google(
+    req: schemas.OAuthTokenRequest,
+    db: Session = Depends(deps.get_db),
+) -> Any:
+    token = (req.token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Token inválido")
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get("https://oauth2.googleapis.com/tokeninfo", params={"id_token": token})
+    if r.status_code != 200:
+        raise HTTPException(status_code=400, detail="No se pudo validar el token de Google")
+
+    data = r.json()
+    email = data.get("email")
+    name = data.get("name") or data.get("given_name") or ""
+    if not email:
+        raise HTTPException(status_code=400, detail="Google no devolvió email")
+
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user:
+        try:
+            validate_text(name, fields=("nombre",))
+        except ValueError:
+            name = ""
+        user = models.User(
+            email=email,
+            hashed_password=security.get_password_hash(str(uuid.uuid4())),
+            full_name=name,
+            is_active=True,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="Usuario inactivo")
+
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    refresh_token_expires = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    return {
+        "access_token": security.create_access_token(user.id, expires_delta=access_token_expires),
+        "refresh_token": security.create_refresh_token(user.id, expires_delta=refresh_token_expires),
+        "token_type": "bearer",
+    }
+
+
+@router.post("/oauth/facebook", response_model=schemas.Token)
+async def oauth_facebook(
+    req: schemas.OAuthTokenRequest,
+    db: Session = Depends(deps.get_db),
+) -> Any:
+    token = (req.token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Token inválido")
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(
+            "https://graph.facebook.com/me",
+            params={"fields": "id,name,email", "access_token": token},
+        )
+    if r.status_code != 200:
+        raise HTTPException(status_code=400, detail="No se pudo validar el token de Facebook")
+
+    data = r.json()
+    email = data.get("email")
+    name = data.get("name") or ""
+    if not email:
+        raise HTTPException(status_code=400, detail="Facebook no devolvió email")
+
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user:
+        try:
+            validate_text(name, fields=("nombre",))
+        except ValueError:
+            name = ""
+        user = models.User(
+            email=email,
+            hashed_password=security.get_password_hash(str(uuid.uuid4())),
+            full_name=name,
+            is_active=True,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="Usuario inactivo")
+
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    refresh_token_expires = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    return {
+        "access_token": security.create_access_token(user.id, expires_delta=access_token_expires),
+        "refresh_token": security.create_refresh_token(user.id, expires_delta=refresh_token_expires),
+        "token_type": "bearer",
+    }
+
 @router.post("/password-recovery/{email}", response_model=schemas.Msg)
 async def recover_password(email: str, db: Session = Depends(deps.get_db)) -> Any:
     """
@@ -163,10 +265,7 @@ async def recover_password(email: str, db: Session = Depends(deps.get_db)) -> An
     password_reset_token = security.create_access_token(
         subject=user.email, expires_delta=timedelta(hours=1)
     )
-    
-    # Simulación de envío de correo
-    print(f"DEBUG: Password reset token for {email}: {password_reset_token}")
-    
+
     return {"msg": "Correo de recuperación de contraseña enviado"}
 
 @router.post("/reset-password/", response_model=schemas.Msg)
@@ -183,7 +282,7 @@ async def reset_password(
             token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
         )
         email = payload.get("sub")
-    except (jwt.JWTError, ValidationError):
+    except (JWTError, ValidationError):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No se pudieron validar las credenciales",
@@ -202,4 +301,3 @@ async def reset_password(
     db.add(user)
     db.commit()
     return {"msg": "Contraseña actualizada exitosamente"}
-
