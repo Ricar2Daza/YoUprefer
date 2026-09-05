@@ -12,7 +12,6 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.12"
-  NODE_VERSION: "24"
 
 jobs:
   backend:
@@ -60,76 +59,11 @@ jobs:
           name: backend-coverage
           path: backend/coverage.xml
 
-  frontend:
-    name: Frontend (lint + tests + build)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-          token: ${{ secrets.GH_PAT }}
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Lint
-        working-directory: frontend
-        run: npm run lint
-
-      - name: Tests
-        working-directory: frontend
-        run: npm run test:ci
-
-      - name: Build
-        working-directory: frontend
-        env:
-          NEXT_PUBLIC_API_URL: http://127.0.0.1:8000/api/v1
-        run: npm run build
-
-      - name: Upload coverage
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-coverage
-          path: frontend/coverage
-
-  mobile:
-    name: Mobile (Expo tests)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: mobile
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-          token: ${{ secrets.GH_PAT }}
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Tests
-        run: npm test
-
   publish-image:
     name: Build y publicar imagen (CD con Podman)
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [backend, frontend, mobile]
+    needs: [backend]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read

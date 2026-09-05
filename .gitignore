@@ -10,6 +10,11 @@ mobile/.env
 .vercel/
 .trae/
 
+# Repos separados: backend es este repo; frontend y mobile viven en sus propios
+# repos (frontend-YoUprefer, mobile-YoUprefer) y NO se versionan aquí.
+frontend/
+mobile/
+
 frontend/node_modules/
 mobile/node_modules/
 
