@@ -1,0 +1,8 @@
+.venv
+venv
+__pycache__
+*.db
+.pytest_cache
+htmlcov_total
+.env
+server_*.log

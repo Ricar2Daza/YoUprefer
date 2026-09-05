@@ -1,10 +1,11 @@
 # YoUprefer
 
+[![CI status](https://github.com/Ricar2Daza/YoUprefer/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Ricar2Daza/YoUprefer/actions/workflows/ci.yml)
+
 ## Documentación clave
-- Reporte técnico (arquitectura/BD/stack/requisitos/seguridad): [TECHNICAL_REPORT.md](file:///Users/nuevomac/Documents/YoUprefer/TECHNICAL_REPORT.md)
-- Guía de ejecución local con PostgreSQL y Redis (macOS): [LOCAL_SETUP.md](file:///Users/nuevomac/Documents/YoUprefer/LOCAL_SETUP.md)
-- Runbook (arranque/checks/detención segura): [RUNBOOK.md](file:///Users/nuevomac/Documents/YoUprefer/RUNBOOK.md)
-- Documentación técnica histórica: [TECHNICAL_DOCUMENTATION.md](file:///Users/nuevomac/Documents/YoUprefer/TECHNICAL_DOCUMENTATION.md)
+- Pipeline CI/CD (trunk-based, Podman): [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+- Imagen del API (Podman): [`backend/Containerfile`](backend/Containerfile)
+- Plan de infraestructura y rollback: [PLAN_INFRAESTRUCTURA.md](PLAN_INFRAESTRUCTURA.md)
 
 ## Ejecución local (paso a paso)
 Este repositorio incluye:
