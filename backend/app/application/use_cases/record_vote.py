@@ -1,10 +1,15 @@
 from dataclasses import dataclass
+import logging
+
+from sqlalchemy.exc import IntegrityError
 
 from app.application.errors import ConflictError, NotFoundError, ValidationAppError
 from app.application.ports.ranking_cache import RankingCachePort
 from app.application.ports.uow import UnitOfWorkPort
 from app.domain.elo import calculate_elo
 from app.models.vote import Vote
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +57,17 @@ class RecordVoteUseCase:
 
             vote = Vote(winner_id=cmd.winner_id, loser_id=cmd.loser_id, voter_id=cmd.voter_id)
             await self._uow.votes.add(vote)
-            await self._uow.commit()
+            try:
+                await self._uow.commit()
+            except IntegrityError as exc:
+                # Dos requests concurrentes intentaron registrar el mismo
+                # emparejamiento (el check previo pasó en ambos). La BD impide
+                # el duplicado; lo tratamos como un conflicto de negocio.
+                logger.info(
+                    "Voto duplicado rechazado (race) voter=%s winner=%s loser=%s",
+                    cmd.voter_id, cmd.winner_id, cmd.loser_id,
+                )
+                raise ConflictError("Ya has votado en este emparejamiento") from exc
             await self._uow.votes.refresh(vote)
 
         if self._ranking_cache is not None:

@@ -154,6 +154,280 @@ async def test_auth_login_wrong_password(client: AsyncClient, db: AsyncSession):
     assert "Correo o contraseña incorrectos" in r.json()["detail"]
 
 
+def _make_fake_httpx_client(*responses, return_for=None):
+    """Build a fake httpx.AsyncClient factory.
+
+    - If ``return_for`` is provided as a callable taking (url, **kwargs) and
+      returning a response, that callable is used to choose the response per
+      call (FIFO not used).
+    - Otherwise the responses are returned in FIFO order.
+    """
+    if return_for is not None:
+        class _FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url, *args, **kwargs):
+                return return_for(url, **kwargs)
+
+        return _FakeAsyncClient
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            self._call_index = 0
+            self._responses = list(responses)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url, *args, **kwargs):
+            resp = self._responses[min(self._call_index, len(self._responses) - 1)]
+            self._call_index += 1
+            return resp
+
+    return _FakeAsyncClient
+
+
+@pytest.mark.asyncio
+async def test_oauth_google_unconfigured(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "GOOGLE_OAUTH_CLIENT_IDS", [])
+    r = await client.post(f"{settings.API_V1_STR}/auth/oauth/google", json={"token": "irrelevant"})
+    assert r.status_code == 503
+    assert "no está configurado" in r.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_oauth_google_rejects_wrong_aud(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "GOOGLE_OAUTH_CLIENT_IDS", ["valid-client-id"])
+
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return {
+                "aud": "other-client-id",
+                "iss": "accounts.google.com",
+                "email": "user@example.com",
+                "email_verified": "true",
+            }
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", _make_fake_httpx_client(_Resp()))
+    r = await client.post(f"{settings.API_V1_STR}/auth/oauth/google", json={"token": "any"})
+    assert r.status_code == 401
+    assert "otra aplicación" in r.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_oauth_google_rejects_unverified_email(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "GOOGLE_OAUTH_CLIENT_IDS", ["valid-client-id"])
+
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return {
+                "aud": "valid-client-id",
+                "iss": "accounts.google.com",
+                "email": "user@example.com",
+                "email_verified": "false",
+            }
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", _make_fake_httpx_client(_Resp()))
+    r = await client.post(f"{settings.API_V1_STR}/auth/oauth/google", json={"token": "any"})
+    assert r.status_code == 401
+    assert "no está verificado" in r.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_oauth_google_rejects_invalid_issuer(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "GOOGLE_OAUTH_CLIENT_IDS", ["valid-client-id"])
+
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return {
+                "aud": "valid-client-id",
+                "iss": "https://attacker.example.com",
+                "email": "user@example.com",
+                "email_verified": "true",
+            }
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", _make_fake_httpx_client(_Resp()))
+    r = await client.post(f"{settings.API_V1_STR}/auth/oauth/google", json={"token": "any"})
+    assert r.status_code == 401
+    assert "emisor" in r.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_auth_refresh_rotates_token(client: AsyncClient, db: AsyncSession):
+    """El refresh debe devolver un nuevo refresh distinto al original (rotación)."""
+    from app.models.user import User
+    from app.core import security
+
+    user = User(
+        email="rotate@example.com",
+        hashed_password=security.get_password_hash("password123"),
+        full_name="Rotate User",
+        is_active=True,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+    r = await client.post(
+        f"{settings.API_V1_STR}/auth/login/access-token",
+        data={"username": "rotate@example.com", "password": "password123"},
+    )
+    assert r.status_code == 200
+    initial_refresh = r.json()["refresh_token"]
+
+    r = await client.post(
+        f"{settings.API_V1_STR}/auth/refresh-token",
+        json={"refresh_token": initial_refresh},
+    )
+    assert r.status_code == 200
+    new_refresh = r.json()["refresh_token"]
+
+    assert new_refresh != initial_refresh
+
+
+@pytest.mark.asyncio
+async def test_auth_refresh_reuse_revokes_family(client: AsyncClient, db: AsyncSession):
+    """Si un refresh ya consumido se vuelve a presentar, se revoca la familia."""
+    from app.models.user import User
+    from app.core import security
+
+    user = User(
+        email="reuse@example.com",
+        hashed_password=security.get_password_hash("password123"),
+        full_name="Reuse User",
+        is_active=True,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+    r = await client.post(
+        f"{settings.API_V1_STR}/auth/login/access-token",
+        data={"username": "reuse@example.com", "password": "password123"},
+    )
+    assert r.status_code == 200
+    refresh = r.json()["refresh_token"]
+
+    # Primer refresh: OK
+    r1 = await client.post(
+        f"{settings.API_V1_STR}/auth/refresh-token",
+        json={"refresh_token": refresh},
+    )
+    assert r1.status_code == 200
+
+    # Segundo uso del MISMO refresh: debe detectar reuso
+    r2 = await client.post(
+        f"{settings.API_V1_STR}/auth/refresh-token",
+        json={"refresh_token": refresh},
+    )
+    assert r2.status_code == 403
+    assert "reutilizado" in r2.json()["detail"].lower() or "familia" in r2.json()["detail"].lower()
+
+    # Incluso el nuevo refresh de la familia queda inutilizable
+    new_refresh = r1.json()["refresh_token"]
+    r3 = await client.post(
+        f"{settings.API_V1_STR}/auth/refresh-token",
+        json={"refresh_token": new_refresh},
+    )
+    assert r3.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_auth_refresh_rejects_token_without_jti(client: AsyncClient, db: AsyncSession):
+    """Refresh tokens sin jti/fid deben ser rechazados (no rotación)."""
+    from jose import jwt as _jwt
+    from app.models.user import User
+    from app.core import security
+
+    user = User(
+        email="legacy@example.com",
+        hashed_password=security.get_password_hash("password123"),
+        full_name="Legacy User",
+        is_active=True,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+    legacy_refresh = _jwt.encode(
+        {"sub": str(user.id), "type": "refresh", "exp": __import__("datetime").datetime.utcnow() + __import__("datetime").timedelta(days=1)},
+        settings.SECRET_KEY,
+        algorithm=settings.ALGORITHM,
+    )
+    r = await client.post(
+        f"{settings.API_V1_STR}/auth/refresh-token",
+        json={"refresh_token": legacy_refresh},
+    )
+    assert r.status_code == 403
+    assert "rotación" in r.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_oauth_facebook_unconfigured(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "FACEBOOK_OAUTH_APP_ID", None)
+    r = await client.post(f"{settings.API_V1_STR}/auth/oauth/facebook", json={"token": "irrelevant"})
+    assert r.status_code == 503
+    assert "no está configurado" in r.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_oauth_facebook_rejects_invalid_token(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "FACEBOOK_OAUTH_APP_ID", "123456")
+
+    class _Resp:
+        status_code = 400
+        def json(self):
+            return {"error": "invalid"}
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", _make_fake_httpx_client(_Resp()))
+    r = await client.post(f"{settings.API_V1_STR}/auth/oauth/facebook", json={"token": "any"})
+    assert r.status_code == 400
+    assert "no se pudo validar" in r.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_oauth_facebook_rejects_mismatched_app_id(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "FACEBOOK_OAUTH_APP_ID", "123456")
+
+    class _MeResp:
+        status_code = 200
+        def json(self):
+            return {"id": "fb-user-id", "name": "FB User", "email": "fb@example.com"}
+
+    class _DebugResp:
+        status_code = 200
+        def json(self):
+            return {"data": {"is_valid": True, "app_id": "999999"}}
+
+    def _router(url, **_kwargs):
+        if "debug_token" in url:
+            return _DebugResp()
+        return _MeResp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", _make_fake_httpx_client(return_for=_router))
+    r = await client.post(f"{settings.API_V1_STR}/auth/oauth/facebook", json={"token": "any"})
+    assert r.status_code == 401
+    assert "otra aplicación" in r.json()["detail"].lower()
+
+
 @pytest.mark.asyncio
 async def test_auth_me_endpoint(client: AsyncClient, db: AsyncSession):
     """Test getting current user info"""

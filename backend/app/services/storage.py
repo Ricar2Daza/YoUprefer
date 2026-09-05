@@ -1,6 +1,9 @@
+import logging
 import boto3
 from botocore.config import Config
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 class StorageService:
     def __init__(self):
@@ -47,8 +50,8 @@ class StorageService:
         Subir archivo directamente a R2 (usado por el endpoint upload-direct).
         """
         if not self.s3_client:
-            print("Advertencia: Credenciales R2 no configuradas. Omitiendo subida.")
-            return True # Simular que funcionó para desarrollo local si no hay credenciales
+            logger.warning("Credenciais R2 não configuradas. Subida simulada.")
+            return True
         
         try:
             self.s3_client.put_object(
@@ -59,7 +62,7 @@ class StorageService:
             )
             return True
         except Exception as e:
-            print(f"Error subiendo a R2: {e}")
+            logger.error("Erro ao subir arquivo para R2", extra={"object_name": object_name, "error": str(e)})
             return False
 
     def delete_file(self, object_name: str) -> bool:

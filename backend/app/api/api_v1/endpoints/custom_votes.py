@@ -11,9 +11,14 @@ from sqlalchemy import and_, or_, func
 
 from app import models, schemas
 from app.api import deps
+from app.core.ratelimit import RateLimiter
 from app.core.redis_client import redis_client
+from app.core.config import settings
 from app.core.moderation import validate_text
+import logging
 from app.services.storage import storage_service
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
@@ -64,7 +69,7 @@ async def _expire_and_notify_custom_votes(db: AsyncSession) -> None:
                         json.dumps({"type": "custom_vote_expiring", "to_user_id": uid, "custom_vote_id": v.id}),
                     )
                 except Exception:
-                    pass
+                    logger.warning("Failed to publish custom_vote_expiring notification to user %s", uid, exc_info=True)
 
     expired_result = await db.execute(
         select(models.CustomVote)
@@ -169,7 +174,12 @@ async def get_custom_vote(
     return vote
 
 
-@router.post("/custom-votes/", response_model=schemas.CustomVote, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/custom-votes/",
+    response_model=schemas.CustomVote,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(RateLimiter(times=10, seconds=3600))],
+)
 async def create_custom_vote(
     title: str = Form(...),
     description: Optional[str] = Form(None),
@@ -227,6 +237,9 @@ async def create_custom_vote(
         ext = f.filename.split(".")[-1] if f.filename and "." in f.filename else "jpg"
         object_name = f"custom_votes/{current_user.id}/{uuid.uuid4()}.{ext}"
         content = await f.read()
+        max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+        if len(content) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"El archivo {f.filename} supera el límite de {settings.MAX_UPLOAD_SIZE_MB}MB")
         ok = storage_service.upload_file(content, object_name, f.content_type or "image/jpeg")
         if not ok:
             raise HTTPException(status_code=500, detail="Error al subir una imagen")
@@ -260,7 +273,7 @@ async def create_custom_vote(
                 json.dumps({"type": "challenge_received", "to_user_id": challenged_user_id, "custom_vote_id": vote.id, "from_user_id": current_user.id}),
             )
         except Exception:
-            pass
+            logger.warning("Failed to publish challenge_received notification to user %s", challenged_user_id, exc_info=True)
 
     result_vote = await db.execute(
         select(models.CustomVote)
@@ -313,6 +326,9 @@ async def join_challenge(
         ext = f.filename.split(".")[-1] if f.filename and "." in f.filename else "jpg"
         object_name = f"custom_votes/{current_user.id}/{uuid.uuid4()}.{ext}"
         content = await f.read()
+        max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+        if len(content) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"El archivo {f.filename} supera el límite de {settings.MAX_UPLOAD_SIZE_MB}MB")
         ok = storage_service.upload_file(content, object_name, f.content_type or "image/jpeg")
         if not ok:
             raise HTTPException(status_code=500, detail="Error al subir una imagen")
@@ -320,6 +336,12 @@ async def join_challenge(
         db.add(models.CustomVotePhoto(participant_id=participant.id, image_url=image_url, object_name=object_name))
 
     await db.commit()
+
+    # El participante ya fue cargado con selectinload(photos) (colección vacía) y
+    # no expira al hacer commit (expire_on_commit=False), por lo que la re-consulta
+    # devolvería una vista obsoleta sin las fotos recién subidas. Lo expiramos
+    # para que la respuesta refleje las fotos persistidas.
+    db.expire(participant)
 
     result_vote = await db.execute(
         select(models.CustomVote)
@@ -329,7 +351,10 @@ async def join_challenge(
     return result_vote.scalars().unique().first()
 
 
-@router.post("/custom-votes/{vote_id}/vote")
+@router.post(
+    "/custom-votes/{vote_id}/vote",
+    dependencies=[Depends(RateLimiter(times=30, seconds=60))],
+)
 async def vote_custom_vote(
     vote_id: int,
     payload: schemas.CustomVoteVoteRequest,

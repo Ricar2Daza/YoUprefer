@@ -1,9 +1,14 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from app.models.profile import Profile
 from app.models.vote import Vote
 from app.services.ranking_service import ranking_service
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 class VotingService:
     @staticmethod
@@ -58,7 +63,15 @@ class VotingService:
             voter_id=voter_id
         )
         db.add(vote)
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError as exc:
+            await db.rollback()
+            logger.info(
+                "Voto duplicado rechazado (race) voter=%s winner=%s loser=%s",
+                voter_id, winner_id, loser_id,
+            )
+            raise ValueError("Ya has votado en este emparejamiento") from exc
         await db.refresh(vote)
         return vote
 

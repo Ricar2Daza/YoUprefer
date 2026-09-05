@@ -1,13 +1,17 @@
 import asyncio
+import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import update, func
 from jose import jwt
+from jose.exceptions import JWTError
 from app.core.config import settings
 from app.core.redis_client import redis_client
 from app.api import deps
 from app import models, schemas
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -16,20 +20,28 @@ router = APIRouter()
 async def websocket_notifications(websocket: WebSocket):
     """
     WebSocket de notificaciones.
-    Requiere token JWT en query param: ?token=...
+    Usa un ticket de curta duração (obtido via POST /auth/ws-ticket)
+    em vez do JWT diretamente, para evitar expor tokens em URLs.
     """
+    from app.core.config import settings
+
     await websocket.accept()
-    token = websocket.query_params.get("token")
-    if not token:
+    ticket = websocket.query_params.get("ticket")
+    if not ticket:
         await websocket.close(code=1008)
         return
 
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        user_id = payload.get("sub")
-        if not user_id:
-            raise ValueError("Invalid token payload")
-    except Exception:
+    user_id = None
+    if redis_client:
+        try:
+            user_id_str = redis_client.get(f"ws_ticket:{ticket}")
+            if user_id_str:
+                user_id = int(user_id_str)
+                redis_client.delete(f"ws_ticket:{ticket}")
+        except Exception:
+            logger.warning("Failed to validate ws_ticket from Redis", exc_info=True)
+
+    if not user_id:
         await websocket.close(code=1008)
         return
 
@@ -38,9 +50,24 @@ async def websocket_notifications(websocket: WebSocket):
         await websocket.close(code=1011)
         return
 
-    pubsub = redis_client.pubsub()
+    try:
+        pubsub = redis_client.pubsub()
+    except Exception:
+        logger.warning("Failed to create Redis pubsub", exc_info=True)
+        await websocket.close(code=1011)
+        return
+
     channel = f"notifications:{user_id}"
-    pubsub.subscribe(channel)
+    try:
+        pubsub.subscribe(channel)
+    except Exception:
+        logger.warning("Failed to subscribe to notifications channel for user %s", user_id, exc_info=True)
+        try:
+            pubsub.close()
+        except Exception:
+            logger.warning("Failed to close pubsub after subscribe error", exc_info=True)
+        await websocket.close(code=1011)
+        return
 
     try:
         # Bucle principal: sondeo de pubsub no bloqueante
@@ -53,6 +80,7 @@ async def websocket_notifications(websocket: WebSocket):
                         data = data.decode("utf-8", errors="ignore")
                     await websocket.send_text(data)
                 except Exception:
+                    logger.warning("Failed to send websocket message to user %s", user_id, exc_info=True)
                     break
             else:
                 # Pequeña espera para ceder el control y evitar alto uso de CPU
@@ -60,13 +88,12 @@ async def websocket_notifications(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     except Exception:
-        # Silenciar errores para no colapsar el servidor
-        pass
+        logger.warning("Unexpected error in websocket notification loop for user %s", user_id, exc_info=True)
     finally:
         try:
             pubsub.close()
         except Exception:
-            pass
+            logger.warning("Failed to close pubsub in finally block for user %s", user_id, exc_info=True)
 
 
 @router.get("/notifications", response_model=schemas.NotificationList)

@@ -7,8 +7,12 @@ from sqlalchemy import func, or_, and_, update
 
 from app import models, schemas
 from app.api import deps
+from app.core.ratelimit import RateLimiter
 from app.core.redis_client import redis_client
+import logging
 from app.core.moderation import validate_text
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
@@ -86,7 +90,12 @@ async def list_messages(
     return result.scalars().all()
 
 
-@router.post("/messages/{user_id}", response_model=schemas.DirectMessage, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/messages/{user_id}",
+    response_model=schemas.DirectMessage,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(RateLimiter(times=20, seconds=60))],
+)
 async def send_message(
     user_id: int,
     payload: schemas.DirectMessageCreate,
@@ -136,7 +145,7 @@ async def send_message(
             }
             redis_client.publish(f"notifications:{user_id}", json.dumps(realtime_payload))
         except Exception:
-            pass
+            logger.warning("Failed to publish direct_message notification to user %s", user_id, exc_info=True)
     return msg
 
 

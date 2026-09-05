@@ -1,6 +1,9 @@
 from typing import Tuple, List, Optional
 import json
+import logging
 from app.core.redis_client import redis_client
+
+logger = logging.getLogger(__name__)
 
 class RankingService:
     K_FACTOR = 32
@@ -15,7 +18,7 @@ class RankingService:
             for key in redis_client.scan_iter("ranking:*"):
                 redis_client.delete(key)
         except Exception:
-            pass
+            logger.warning("Failed to invalidate ranking cache", exc_info=True)
 
     @staticmethod
     def calculate_elo(winner_rating: int, loser_rating: int) -> Tuple[int, int]:
@@ -39,6 +42,7 @@ class RankingService:
         try:
             return redis_client.get(key)
         except Exception:
+            logger.warning("Failed to read ranking cache key %s", key, exc_info=True)
             return None
 
     @staticmethod
@@ -48,6 +52,6 @@ class RankingService:
         try:
             redis_client.setex(key, ttl, data)
         except Exception:
-            pass
+            logger.warning("Failed to set ranking cache key %s", key, exc_info=True)
 
 ranking_service = RankingService()

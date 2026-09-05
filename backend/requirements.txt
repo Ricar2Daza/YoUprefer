@@ -1,21 +1,40 @@
-fastapi
-uvicorn[standard]
-sqlalchemy
-psycopg2-binary
-pydantic
-pydantic-settings
-python-dotenv
-python-jose[cryptography]
-passlib
-python-multipart
-redis
-boto3
-alembic
-email-validator
-pytest
-pytest-cov
-httpx
-pytest-asyncio
-aiosqlite
-asyncpg
-fakeredis
+# API
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+
+# Base de datos
+sqlalchemy>=2.0,<3
+psycopg2-binary>=2.9,<3
+asyncpg>=0.30,<1
+alembic>=1.14,<2
+
+# Validación
+pydantic>=2.10,<3
+pydantic-settings>=2.7,<3
+email-validator>=2.2,<3
+
+# Seguridad
+python-jose[cryptography]>=3.3,<4
+passlib>=1.7.4,<2
+# passlib 1.7.4 es incompatible con bcrypt >= 4.1 (error "password cannot be
+# longer than 72 bytes" al inicializar el backend). Pinned a 4.0.1 que sí soporta.
+bcrypt==4.0.1
+python-multipart>=0.0,<1
+
+# Cache y colas
+redis>=5.2,<6
+
+# Storage
+boto3>=1.36,<2
+
+# Utilidades
+python-dotenv>=1.0,<2
+
+# --- Dependencias de desarrollo ---
+# pytest
+pytest>=8.3,<9
+pytest-cov>=6.0,<7
+httpx>=0.28,<1
+pytest-asyncio>=0.25,<1
+aiosqlite>=0.20,<1
+fakeredis>=2.26,<3

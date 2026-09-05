@@ -60,6 +60,25 @@ jobs:
           cd frontend
           npm run build
 
+  test-mobile:
+    name: Mobile Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./mobile
+    steps:
+      - uses: actions/checkout@v3
+      - name: Use Node.js 18.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18.x
+          cache: 'npm'
+          cache-dependency-path: mobile/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Run Tests
+        run: npm test --if-present
+
   infrastructure:
     name: Terraform Validation
     runs-on: ubuntu-latest
@@ -78,7 +97,7 @@ jobs:
   # Aquí iría el Job de despliegue a AWS ECR y ECS Fargate (dependiente del merge y secrets)
   deploy:
     name: Build & Deploy (Simulado)
-    needs: [test-backend, test-frontend, infrastructure]
+    needs: [test-backend, test-frontend, test-mobile, infrastructure]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:

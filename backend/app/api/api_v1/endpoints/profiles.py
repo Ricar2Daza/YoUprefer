@@ -1,5 +1,8 @@
 from typing import List, Any, Optional
 import json
+import logging
+import random
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,9 +16,12 @@ from app.api import deps
 from app.api.deps import get_async_db
 from app.models.profile import Profile, ProfileType, Gender
 from app.models.comment import Comment
+from app.models.category import Category
+from app.models.vote import Vote
 from app.services.storage import storage_service
 from app.services.season_service import season_service
 from app.core.redis_client import redis_client
+from app.core.config import settings
 from app.core.moderation import validate_text
 import logging
 
@@ -28,15 +34,15 @@ def _invalidate_ranking_cache():
         try:
             for key in redis_client.scan_iter("ranking:*"):
                 redis_client.delete(key)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Erro ao invalidar cache de ranking", extra={"error": str(exc)})
 
 def _invalidate_participation_cache(user_id: int):
     if redis_client:
         try:
             redis_client.delete(f"participation:{user_id}")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Erro ao invalidar cache de participação", extra={"user_id": user_id, "error": str(exc)})
 
 @router.get("/pair", response_model=List[schemas.Profile])
 async def get_random_pair(
@@ -49,9 +55,6 @@ async def get_random_pair(
     """
     Obtener dos perfiles aleatorios del mismo tipo y género para comparar.
     """
-    # Forzar tipo REAL por ahora según requerimientos
-    type = ProfileType.REAL
-    
     query = select(Profile).filter(
         Profile.type == type,
         Profile.gender == gender,
@@ -63,7 +66,6 @@ async def get_random_pair(
         query = query.filter(Profile.category_id == category_id)
 
     # Optimización: Obtener IDs candidatos
-    import random
     
     # Obtener solo los IDs que cumplen los criterios
     # En async, seleccionamos solo la columna ID
@@ -75,16 +77,20 @@ async def get_random_pair(
             cached = redis_client.get(cache_key)
             if cached:
                 candidate_ids = json.loads(cached)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Erro ao ler cache de pair", extra={"cache_key": cache_key, "error": str(exc)})
     if not candidate_ids:
-        result = await db.execute(id_query)
-        candidate_ids = result.scalars().all()
+        try:
+            result = await db.execute(id_query)
+            candidate_ids = result.scalars().all()
+        except Exception as exc:
+            logger.exception("Error al cargar candidatos de emparejamiento", extra={"cache_key": cache_key, "error": str(exc)})
+            raise HTTPException(status_code=500, detail="No se pudieron cargar los perfiles. Inténtalo de nuevo.")
         if redis_client and candidate_ids:
             try:
                 redis_client.setex(cache_key, 30, json.dumps(candidate_ids))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Erro ao escrever cache de pair", extra={"cache_key": cache_key, "error": str(exc)})
     
     if len(candidate_ids) < 2:
         raise HTTPException(status_code=404, detail="No hay suficientes perfiles para comparar")
@@ -92,16 +98,18 @@ async def get_random_pair(
     selected_ids = None
 
     if current_user:
-        from app.models.vote import Vote
-
-        id_set = set(candidate_ids)
-        votes_rows = await db.execute(
-            select(Vote.winner_id, Vote.loser_id).filter(Vote.voter_id == current_user.id)
-        )
-        voted_pairs = set()
-        for w, l in votes_rows.all():
-            if w in id_set and l in id_set and w != l:
-                voted_pairs.add((w, l) if w < l else (l, w))
+        try:
+            id_set = set(candidate_ids)
+            votes_rows = await db.execute(
+                select(Vote.winner_id, Vote.loser_id).filter(Vote.voter_id == current_user.id)
+            )
+            voted_pairs = set()
+            for w, l in votes_rows.all():
+                if w in id_set and l in id_set and w != l:
+                    voted_pairs.add((w, l) if w < l else (l, w))
+        except Exception as exc:
+            logger.exception("Error al consultar votos del usuario para el pair", extra={"user_id": current_user.id, "error": str(exc)})
+            raise HTTPException(status_code=500, detail="No se pudieron cargar los perfiles. Inténtalo de nuevo.")
 
         total_pairs = len(candidate_ids) * (len(candidate_ids) - 1) // 2
         if total_pairs > 0 and len(voted_pairs) >= total_pairs:
@@ -125,9 +133,13 @@ async def get_random_pair(
     else:
         selected_ids = random.sample(candidate_ids, 2)
 
-    profiles_query = select(Profile).filter(Profile.id.in_(selected_ids))
-    result = await db.execute(profiles_query)
-    profiles = result.scalars().all()
+    try:
+        profiles_query = select(Profile).filter(Profile.id.in_(selected_ids))
+        result = await db.execute(profiles_query)
+        profiles = result.scalars().all()
+    except Exception as exc:
+        logger.exception("Error al cargar los perfiles del emparejamiento", extra={"selected_ids": selected_ids, "error": str(exc)})
+        raise HTTPException(status_code=500, detail="No se pudieron cargar los perfiles. Inténtalo de nuevo.")
 
     return profiles
 
@@ -148,7 +160,6 @@ async def recommend_profiles(
     if category_id:
         query = query.filter(Profile.category_id == category_id)
     if current_user:
-        from app.models.vote import Vote
         voted_rows = await db.execute(select(Vote.winner_id, Vote.loser_id).filter(Vote.voter_id == current_user.id))
         excluded: set[int] = set()
         for w, l in voted_rows.all():
@@ -192,15 +203,11 @@ async def create_profile(
         )
     
     # Generar nombre de archivo único
-    import uuid
     file_extension = profile_in.image_extension or "jpg"
     object_name = f"profiles/{current_user.id}_{uuid.uuid4()}.{file_extension}"
     
-    # Resolver categoría
     cat_id = profile_in.category_id
     if not cat_id:
-        # Predeterminado a General
-        from app.models.category import Category
         result = await db.execute(select(Category).filter(Category.slug == "general"))
         general = result.scalars().first()
         if general:
@@ -227,10 +234,7 @@ async def create_profile(
     if not upload_data:
          raise HTTPException(status_code=500, detail="No se pudo generar la URL de subida")
 
-    try:
-        logger.info(f"participation_status_changed user_id={current_user.id} profile_id={db_obj.id} action=create_pending")
-    except Exception:
-        pass
+    logger.info(f"participation_status_changed user_id={current_user.id} profile_id={db_obj.id} action=create_pending")
     return {
         "profile": jsonable_encoder(db_obj),
         "upload_url": upload_data
@@ -249,8 +253,6 @@ async def upload_profile_direct(
     Endpoint de carga directa (para desarrollo/pruebas).
     Sube el archivo a R2 y crea el perfil en una sola solicitud.
     """
-    from fastapi import UploadFile, File, Form
-    
     if not legal_consent:
         raise HTTPException(status_code=400, detail="Se requiere consentimiento legal")
 
@@ -267,22 +269,21 @@ async def upload_profile_direct(
         )
     
     # Generar nombre de archivo único
-    import uuid
     file_extension = file.filename.split(".")[-1] if "." in file.filename else "jpg"
     object_name = f"profiles/{current_user.id}_{uuid.uuid4()}.{file_extension}"
     
     # Subir a R2
     file_content = await file.read()
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    if len(file_content) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"El archivo supera el límite de {settings.MAX_UPLOAD_SIZE_MB}MB")
     success = storage_service.upload_file(file_content, object_name, file.content_type)
     
     if not success:
         raise HTTPException(status_code=500, detail="Error al subir la imagen")
     
-    # Resolver categoría
     cat_id = category_id
     if not cat_id:
-        # Predeterminado a General
-        from app.models.category import Category
         result = await db.execute(select(Category).filter(Category.slug == "general"))
         general = result.scalars().first()
         if general:
@@ -305,10 +306,7 @@ async def upload_profile_direct(
     _invalidate_ranking_cache()
     _invalidate_participation_cache(current_user.id)
     
-    try:
-        logger.info(f"participation_status_changed user_id={current_user.id} profile_id={db_obj.id} action=create_approved")
-    except Exception:
-        pass
+    logger.info(f"participation_status_changed user_id={current_user.id} profile_id={db_obj.id} action=create_approved")
     return {
         "id": db_obj.id,
         "type": db_obj.type,
@@ -341,8 +339,8 @@ async def get_participation_status(
             cached = redis_client.get(cache_key)
             if cached:
                 return json.loads(cached)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Erro ao ler cache de participação", extra={"user_id": current_user.id, "error": str(exc)})
 
     result = await db.execute(
         select(Profile.id).filter(
@@ -361,14 +359,14 @@ async def get_participation_status(
     if redis_client:
         try:
             redis_client.setex(cache_key, 30, json.dumps(data))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Erro ao escrever cache de participação", extra={"user_id": current_user.id, "error": str(exc)})
     return data
 
 @router.get("/ranking", response_model=List[schemas.Profile])
 async def get_ranking(
     type: ProfileType = ProfileType.REAL,
-    gender: Gender = None,
+    gender: Optional[Gender] = None,
     category_id: Optional[int] = None,
     limit: int = 50,
     db: AsyncSession = Depends(get_async_db)
@@ -392,7 +390,7 @@ async def get_ranking(
             if cached_data:
                 return json.loads(cached_data)
         except Exception as e:
-            print(f"⚠️ Error de lectura en caché Redis: {e}")
+            logger.warning("Erro ao ler cache Redis", extra={"cache_key": cache_key, "error": str(e)})
 
     query = select(Profile).filter(
         Profile.type == type,
@@ -407,17 +405,24 @@ async def get_ranking(
         query = query.filter(Profile.category_id == category_id)
         
     query = query.order_by(Profile.elo_score.desc()).limit(limit)
-    result = await db.execute(query)
-    results = result.scalars().all()
+    try:
+        result = await db.execute(query)
+        results = result.scalars().all()
+    except Exception as exc:
+        logger.exception("Error al consultar el ranking", extra={
+            "cache_key": cache_key, "type": str(type), "gender": str(gender), "error": str(exc),
+        })
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo cargar el ranking. Inténtalo de nuevo en unos segundos.",
+        )
 
-    # Cachear resultados
     if redis_client:
         try:
-            # Convertir objetos ORM a lista de dicts para serialización JSON
             data_to_cache = jsonable_encoder(results)
             redis_client.setex(cache_key, 60, json.dumps(data_to_cache))
         except Exception as e:
-            print(f"⚠️ Error de escritura en caché Redis: {e}")
+            logger.warning("Erro ao escrever cache Redis", extra={"cache_key": cache_key, "error": str(e)})
         
     return results
 
@@ -442,10 +447,7 @@ async def leave_game(
     await db.refresh(profile)
     _invalidate_ranking_cache()
     _invalidate_participation_cache(profile.user_id)
-    try:
-        logger.info(f"participation_status_changed user_id={profile.user_id} profile_id={profile.id} action=leave")
-    except Exception:
-        pass
+    logger.info(f"participation_status_changed user_id={profile.user_id} profile_id={profile.id} action=leave")
     return profile
 
 @router.delete("/{id}", response_model=schemas.Profile)
@@ -465,9 +467,18 @@ async def delete_profile(
         
     if profile.user_id != current_user.id and not current_user.is_superuser:
         raise HTTPException(status_code=400, detail="Permisos insuficientes")
-        
-    await db.delete(profile)
+
+    # Borrado lógico: desactivamos el perfil en lugar de eliminarlo físicamente
+    # para no romper la integridad referencial de votos/comentarios/insignias
+    # (el historial de votos y Elo debe conservarse).
+    profile.is_active = False
+    profile.is_approved = False
+    db.add(profile)
     await db.commit()
+    await db.refresh(profile)
+    _invalidate_ranking_cache()
+    _invalidate_participation_cache(profile.user_id)
+    logger.info(f"participation_status_changed user_id={profile.user_id} profile_id={profile.id} action=delete_soft")
     return profile
 
 

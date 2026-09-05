@@ -10,6 +10,9 @@ from app.application.errors import ConflictError, NotFoundError, ValidationAppEr
 from app.application.use_cases.record_vote import RecordVoteCommand, RecordVoteUseCase
 
 from app.core.ratelimit import RateLimiter
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -44,6 +47,5 @@ async def cast_vote(
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Unexpected error recording vote")
         raise HTTPException(status_code=500, detail="Internal server error")

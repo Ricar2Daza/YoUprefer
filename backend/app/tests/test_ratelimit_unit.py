@@ -103,3 +103,45 @@ async def test_ratelimiter_uses_user_id_when_bearer_token_present(monkeypatch):
 
     keys = list(r.scan_iter("rate_limit:*"))
     assert any("user:99" in k for k in keys)
+
+
+@pytest.mark.asyncio
+async def test_ratelimiter_disabled_does_nothing(monkeypatch):
+    monkeypatch.setattr("app.core.ratelimit.redis_client", None)
+    monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", False)
+
+    limiter = RateLimiter(times=1, seconds=60)
+    req = DummyRequest("/api/v1/votes/")
+
+    # No debe lanzar aunque redis_client sea None y times=1.
+    await limiter(req)
+    await limiter(req)
+
+
+@pytest.mark.asyncio
+async def test_ratelimiter_fail_closed_when_redis_unavailable(monkeypatch):
+    monkeypatch.setattr("app.core.ratelimit.redis_client", None)
+    monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", True)
+    monkeypatch.setattr(settings, "RATE_LIMIT_FAIL_OPEN", False)
+
+    limiter = RateLimiter(times=5, seconds=60)
+    req = DummyRequest("/api/v1/votes/")
+
+    with pytest.raises(Exception) as exc:
+        await limiter(req)
+
+    assert getattr(exc.value, "status_code", None) == 503
+
+
+@pytest.mark.asyncio
+async def test_ratelimiter_fail_open_when_redis_unavailable(monkeypatch):
+    monkeypatch.setattr("app.core.ratelimit.redis_client", None)
+    monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", True)
+    monkeypatch.setattr(settings, "RATE_LIMIT_FAIL_OPEN", True)
+
+    limiter = RateLimiter(times=5, seconds=60)
+    req = DummyRequest("/api/v1/votes/")
+
+    # No debe lanzar
+    await limiter(req)
+    await limiter(req)

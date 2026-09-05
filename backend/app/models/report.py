@@ -6,10 +6,11 @@ import enum
 from app.db.base_class import Base
 
 
-class ReportStatus(enum.Enum):
+class ReportStatus(str, enum.Enum):
     PENDING = "pending"
     REVIEWED = "reviewed"
     DISMISSED = "dismissed"
+    APPEALED = "appealed"
 
 
 class Report(Base):
@@ -23,6 +24,8 @@ class Report(Base):
     status = Column(SAEnum(ReportStatus), nullable=False, default=ReportStatus.PENDING)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     resolved_at = Column(DateTime(timezone=True), nullable=True)
+    appeal_reason = Column(String, nullable=True)
+    appealed_at = Column(DateTime(timezone=True), nullable=True)
 
     reporter = relationship("User", foreign_keys=[reporter_id])
     target_profile = relationship("Profile", foreign_keys=[target_profile_id])

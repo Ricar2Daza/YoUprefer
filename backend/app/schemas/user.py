@@ -15,6 +15,7 @@ class UserBase(BaseModel):
     full_name: Optional[str] = None
     avatar_url: Optional[str] = None
     bio: Optional[str] = None
+    is_email_verified: Optional[bool] = None
 
 class UserCreate(UserBase):
     email: EmailStr

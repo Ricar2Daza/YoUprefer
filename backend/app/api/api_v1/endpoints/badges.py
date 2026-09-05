@@ -6,6 +6,9 @@ from app import models, schemas
 from app.api import deps
 from app.api.deps import get_async_db
 from app.services.badge_service import badge_service
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -51,7 +54,7 @@ async def read_user_badges(
     try:
         await badge_service.check_and_award_badges(db, current_user.id)
     except Exception as e:
-        print(f"Error checking badges: {e}")
+        logger.warning("Error checking badges for user %s: %s", current_user.id, e, exc_info=True)
         
     query = select(models.UserBadge).filter(models.UserBadge.user_id == current_user.id)
     # Eager load badge info

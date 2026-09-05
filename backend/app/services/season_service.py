@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 import random
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,8 @@ from app.models.badge import Season, Badge, UserBadge
 from app.models.user import User
 from app.models.notification import Notification
 from app.core.redis_client import redis_client
+
+logger = logging.getLogger(__name__)
 
 class SeasonService:
     async def ensure_season_current(self, db: AsyncSession) -> bool:
@@ -32,7 +35,7 @@ class SeasonService:
                 if not acquired:
                     return False
             except Exception:
-                pass
+                logger.warning("Failed to acquire season reset lock", exc_info=True)
         await self.async_reset_rankings_and_award_badges(db, f"Season_{datetime.now().strftime('%Y_%m')}")
         return True
 
@@ -173,7 +176,7 @@ class SeasonService:
                     }
                     redis_client.publish(f"notifications:{p.user_id}", json.dumps(realtime_payload))
                 except Exception:
-                    pass
+                    logger.warning("Failed to publish motivation notification to user %s", p.user_id, exc_info=True)
 
         await db.execute(update(Profile).values(elo_score=1200))
         next_season_name = f"Season_{datetime.now().strftime('%Y_%m')}_{int(datetime.now().timestamp())}"
@@ -188,7 +191,9 @@ class SeasonService:
             slug = name.lower().replace(" ", "-")
             badge = Badge(name=name, slug=slug, description=desc, icon=icon, category="ranking", is_active=True)
             db.add(badge)
-            await db.commit()
+            # flush (no commit) para no romper la atomicidad del reset; el
+            # commit final de la operación persiste todo junto.
+            await db.flush()
             await db.refresh(badge)
         return badge
 

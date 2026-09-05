@@ -2,6 +2,7 @@ from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func, and_, desc
+from sqlalchemy.exc import IntegrityError
 from app.models.badge import Badge, UserBadge
 from app.models.profile import Profile
 from app.models.user import User
@@ -147,7 +148,19 @@ class BadgeService:
                         )
                         db.add(notification)
                         
-                        await db.commit() # Commit inmediato para notificaciones realtime
+                        try:
+                            # Commit inmediato para notificaciones realtime
+                            await db.commit()
+                        except IntegrityError:
+                            # Carrera: otro request/instancia ya otorgó exactamente
+                            # esta badge (misma constraint) en el ínterin. La badge
+                            # ya está concedida; ignorar el conflicto para no
+                            # responder 500 ante concurrencia.
+                            logger.info(
+                                "Badge %s (id=%s) ya otorgada por otro request al user %s; ignorando carrera",
+                                badge.slug, badge.id, user_id,
+                            )
+                            await db.rollback()
 
     async def init_default_badges(self, db: AsyncSession):
         """Crea las badges por defecto si no existen"""
@@ -254,11 +267,28 @@ class BadgeService:
             }
         ]
 
+        # Leer primero TODAS las existentes (slug + name) para evitar que el
+        # autoflush interrumpa el bucle y para detectar colisiones por nombre.
+        existing_result = await db.execute(select(Badge.slug, Badge.name))
+        existing = existing_result.all()
+        existing_slugs = {row.slug for row in existing}
+        existing_names = {row.name for row in existing}
+
+        to_add = []
         for badge_data in defaults:
-            exists = await db.execute(select(Badge).filter(Badge.slug == badge_data["slug"]))
-            if not exists.scalars().first():
-                db.add(Badge(**badge_data))
-        
-        await db.commit()
+            if badge_data["slug"] in existing_slugs or badge_data["name"] in existing_names:
+                continue
+            to_add.append(Badge(**badge_data))
+
+        if not to_add:
+            return
+
+        db.add_all(to_add)
+        try:
+            await db.commit()
+        except IntegrityError:
+            # Otro request/instancia ya los creó de forma concurrente.
+            # Es seguro ignorar: los datos ya están en la BD.
+            await db.rollback()
 
 badge_service = BadgeService()

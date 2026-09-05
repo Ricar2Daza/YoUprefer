@@ -12,10 +12,13 @@ from httpx import AsyncClient, ASGITransport
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 from app.db.base import Base
 from app.api.deps import get_async_db, get_db
 from app.main import app
+from app.core.redis_client import redis_client
 
 # URLs de conexión a la base de datos de prueba
 # Por defecto usa SQLite para que pytest funcione sin Postgres/asyncpg.
@@ -86,6 +89,7 @@ def db_sync() -> Generator[Session, None, None]:
     finally:
         session.close()
 
+
 @pytest.fixture
 async def client(db: AsyncSession, db_sync: Session) -> AsyncGenerator[AsyncClient, None]:
     """
@@ -100,8 +104,38 @@ async def client(db: AsyncSession, db_sync: Session) -> AsyncGenerator[AsyncClie
     app.dependency_overrides[get_async_db] = override_get_async_db
     app.dependency_overrides[get_db] = override_get_db
     
+    from app.core.config import settings as _settings
+    _rate_limit_prev = _settings.RATE_LIMIT_ENABLED
+    # Todos los requests del ASGITransport comparten la misma IP de cliente, y un
+    # mismo test puede registrar/loguear muchas veces, por lo que los límites por
+    # IP se dispararían falsamente. Se desactiva el rate limit genérico en las
+    # pruebas de integración; el bloqueo anti brute-force (email+IP) sigue activo.
+    _settings.RATE_LIMIT_ENABLED = False
+
     # Usar ASGITransport para conectar directamente a la app FastAPI
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-        yield c
-    
-    app.dependency_overrides.clear()
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            yield c
+    finally:
+        _settings.RATE_LIMIT_ENABLED = _rate_limit_prev
+        app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_redis_state():
+    """Limpia el estado en-memoria (rate limit, lockouts, tokens, ws) antes de
+    cada prueba para que los contadores/buckets compartidos por IP no se
+    arrastren entre pruebas. No-op con Redis real."""
+
+    store = getattr(redis_client, "_data", None)
+    if store is not None:
+        store.clear()
+    else:
+        # Redis real: el contador anti brute-force (email+IP) persiste entre
+        # ejecuciones y entre pruebas que comparten la misma IP de test, con
+        # TTL largo (LOGIN_LOCKOUT_MAX_SECONDS). Se limpia por prefijo para
+        # que la suite sea hermética y repetible.
+        for prefix in ("login_attempts:", "login_lock:"):
+            for key in redis_client.scan_iter(f"{prefix}*"):
+                redis_client.delete(key)
+    yield

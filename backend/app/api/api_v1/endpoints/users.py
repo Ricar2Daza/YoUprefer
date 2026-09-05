@@ -1,18 +1,45 @@
+import logging
 from typing import Any, List, Optional
 import json
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func, or_, and_
+from sqlalchemy.orm import aliased
 
 from app import models, schemas
 from app.api import deps
+from app.core import security
 from app.core.redis_client import redis_client
+from app.core.config import settings
 from app.services.storage import storage_service
 from app.core.moderation import validate_text
 import uuid
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
+async def _build_self_user_response(
+    db: AsyncSession, user: models.User, votes_count: int, badges: list
+) -> schemas.User:
+    follower_count, following_count = await _get_follow_counts(db, user.id)
+    return schemas.User(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        avatar_url=user.avatar_url,
+        bio=user.bio,
+        is_active=user.is_active,
+        is_superuser=user.is_superuser,
+        votes_cast_count=votes_count,
+        badges=badges,
+        follower_count=follower_count,
+        following_count=following_count,
+        mutual_following_count=0,
+        is_online=True,
+    )
 
 
 async def _get_follow_counts(db: AsyncSession, user_id: int) -> tuple[int, int]:
@@ -47,12 +74,15 @@ def _is_online(user_id: int) -> bool:
     try:
         return bool(redis_client.get(f"online:{user_id}"))
     except Exception:
+        logger.warning("Failed to check online status for user %s", user_id, exc_info=True)
         return False
+
+
+from sqlalchemy.orm import aliased
 
 
 async def _mutual_following_count(db: AsyncSession, a: int, b: int) -> int:
     f1 = models.Follow
-    from sqlalchemy.orm import aliased
     f2 = aliased(models.Follow)
     result = await db.execute(
         select(func.count(f1.following_id))
@@ -89,23 +119,7 @@ async def read_user_me(
         for ub, b, s in badges_rows.all()
     ]
 
-    follower_count, following_count = await _get_follow_counts(db, current_user.id)
-
-    return schemas.User(
-        id=current_user.id,
-        email=current_user.email,
-        full_name=current_user.full_name,
-        avatar_url=current_user.avatar_url,
-        bio=current_user.bio,
-        is_active=current_user.is_active,
-        is_superuser=current_user.is_superuser,
-        votes_cast_count=votes_count,
-        badges=badges,
-        follower_count=follower_count,
-        following_count=following_count,
-        mutual_following_count=0,
-        is_online=True,
-    )
+    return await _build_self_user_response(db, current_user, votes_count, badges)
 
 
 @router.post("/me/avatar", response_model=schemas.User)
@@ -124,6 +138,9 @@ async def upload_user_avatar(
     object_name = f"avatars/{current_user.id}_{uuid.uuid4()}.{file_extension}"
     
     file_content = await file.read()
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    if len(file_content) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"El archivo supera el límite de {settings.MAX_UPLOAD_SIZE_MB}MB")
     success = storage_service.upload_file(file_content, object_name, file.content_type)
     
     if not success:
@@ -142,10 +159,6 @@ async def upload_user_avatar(
     )
     votes_count = result.scalar() or 0
 
-    follower_count, following_count = await _get_follow_counts(db, current_user.id)
-    
-    # Badges (podemos devolver lista vacía por eficiencia o recalcular)
-    # Por simplicidad recalculamos
     badges_rows = await db.execute(
         select(models.UserBadge, models.Badge, models.Season)
         .join(models.Badge, models.UserBadge.badge_id == models.Badge.id)
@@ -153,30 +166,10 @@ async def upload_user_avatar(
         .filter(models.UserBadge.user_id == current_user.id)
     )
     badges = [
-        schemas.UserBadgeBrief(
-            name=b.name,
-            icon=b.icon,
-            season_name=s.name,
-            profile_id=ub.profile_id,
-        )
+        schemas.UserBadgeBrief(name=b.name, icon=b.icon, season_name=s.name, profile_id=ub.profile_id)
         for ub, b, s in badges_rows.all()
     ]
-
-    return schemas.User(
-        id=current_user.id,
-        email=current_user.email,
-        full_name=current_user.full_name,
-        avatar_url=current_user.avatar_url,
-        bio=current_user.bio,
-        is_active=current_user.is_active,
-        is_superuser=current_user.is_superuser,
-        votes_cast_count=votes_count,
-        badges=badges,
-        follower_count=follower_count,
-        following_count=following_count,
-        mutual_following_count=0,
-        is_online=True,
-    )
+    return await _build_self_user_response(db, current_user, votes_count, badges)
 
 
 @router.put("/me", response_model=schemas.User)
@@ -197,8 +190,6 @@ async def update_user_me(
 
     update_data = user_in.model_dump(exclude_unset=True)
     if update_data.get("password"):
-        from app.core import security
-
         update_data["hashed_password"] = security.get_password_hash(update_data.pop("password"))
 
     if "full_name" in update_data:
@@ -226,7 +217,6 @@ async def update_user_me(
         select(func.count(models.Vote.id)).filter(models.Vote.voter_id == current_user.id)
     )
     votes_count = result.scalar() or 0
-
     badges_rows = await db.execute(
         select(models.UserBadge, models.Badge, models.Season)
         .join(models.Badge, models.UserBadge.badge_id == models.Badge.id)
@@ -234,32 +224,10 @@ async def update_user_me(
         .filter(models.UserBadge.user_id == current_user.id)
     )
     badges = [
-        schemas.UserBadgeBrief(
-            name=b.name,
-            icon=b.icon,
-            season_name=s.name,
-            profile_id=ub.profile_id,
-        )
+        schemas.UserBadgeBrief(name=b.name, icon=b.icon, season_name=s.name, profile_id=ub.profile_id)
         for ub, b, s in badges_rows.all()
     ]
-
-    follower_count, following_count = await _get_follow_counts(db, current_user.id)
-
-    return schemas.User(
-        id=current_user.id,
-        email=current_user.email,
-        full_name=current_user.full_name,
-        avatar_url=current_user.avatar_url,
-        bio=current_user.bio,
-        is_active=current_user.is_active,
-        is_superuser=current_user.is_superuser,
-        votes_cast_count=votes_count,
-        badges=badges,
-        follower_count=follower_count,
-        following_count=following_count,
-        mutual_following_count=0,
-        is_online=True,
-    )
+    return await _build_self_user_response(db, current_user, votes_count, badges)
 
 
 @router.get("/search", response_model=List[schemas.UserPublicProfile])
@@ -284,19 +252,51 @@ async def search_users(
     )
     users = result.scalars().all()
 
+    if not users:
+        return []
+
+    user_ids = [u.id for u in users]
+
+    follower_result = await db.execute(
+        select(models.Follow.following_id, func.count(models.Follow.id))
+        .filter(models.Follow.following_id.in_(user_ids))
+        .group_by(models.Follow.following_id)
+    )
+    follower_map = dict(follower_result.all())
+
+    following_result = await db.execute(
+        select(models.Follow.follower_id, func.count(models.Follow.id))
+        .filter(models.Follow.follower_id.in_(user_ids))
+        .group_by(models.Follow.follower_id)
+    )
+    following_map = dict(following_result.all())
+
+    cv_count_result = await db.execute(
+        select(models.CustomVote.owner_id, func.count(models.CustomVote.id))
+        .filter(models.CustomVote.owner_id.in_(user_ids), models.CustomVote.is_active == True)
+        .group_by(models.CustomVote.owner_id)
+    )
+    cv_map = dict(cv_count_result.all())
+
+    block_pairs: set[tuple[int, int]] = set()
+    if current_user:
+        all_ids = user_ids + [current_user.id]
+        block_result = await db.execute(
+            select(models.UserBlock.blocker_id, models.UserBlock.blocked_id)
+            .filter(models.UserBlock.blocker_id.in_(all_ids), models.UserBlock.blocked_id.in_(all_ids))
+        )
+        block_pairs = {(r.blocker_id, r.blocked_id) for r in block_result.all()}
+
     items: list[schemas.UserPublicProfile] = []
     for u in users:
-        follower_count, following_count = await _get_follow_counts(db, u.id)
+        follower_count = follower_map.get(u.id, 0)
+        following_count = following_map.get(u.id, 0)
         mutual = 0
         is_blocked_by_me = False
         has_blocked_me = False
         if current_user:
-            mutual = await _mutual_following_count(db, current_user.id, u.id)
-            is_blocked_by_me = await _is_blocked(db, current_user.id, u.id)
-            has_blocked_me = await _is_blocked(db, u.id, current_user.id)
-
-        cv_count_result = await db.execute(select(func.count(models.CustomVote.id)).filter(models.CustomVote.owner_id == u.id, models.CustomVote.is_active == True))
-        custom_votes_created_count = int(cv_count_result.scalar() or 0)
+            is_blocked_by_me = (current_user.id, u.id) in block_pairs
+            has_blocked_me = (u.id, current_user.id) in block_pairs
 
         items.append(
             schemas.UserPublicProfile(
@@ -315,7 +315,7 @@ async def search_users(
                 is_online=_is_online(u.id),
                 is_blocked_by_me=is_blocked_by_me,
                 has_blocked_me=has_blocked_me,
-                custom_votes_created_count=custom_votes_created_count,
+                custom_votes_created_count=cv_map.get(u.id, 0),
             )
         )
     return items
@@ -436,8 +436,8 @@ async def follow_user(
                 "follow_id": follow.id,
             }
             redis_client.publish(f"notifications:{user_id}", json.dumps(payload))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Erro ao publicar notificação de novo seguidor", extra={"to_user_id": user_id, "error": str(exc)})
 
     return follow
 
@@ -567,6 +567,51 @@ async def unblock_user(
     return {"detail": "unblocked"}
 
 
+async def _build_user_list_with_counts(
+    db: AsyncSession, users: list[models.User]
+) -> list[schemas.User]:
+    if not users:
+        return []
+
+    user_ids = [u.id for u in users]
+
+    follower_result = await db.execute(
+        select(models.Follow.following_id, func.count(models.Follow.id))
+        .filter(models.Follow.following_id.in_(user_ids))
+        .group_by(models.Follow.following_id)
+    )
+    follower_map = dict(follower_result.all())
+
+    following_result = await db.execute(
+        select(models.Follow.follower_id, func.count(models.Follow.id))
+        .filter(models.Follow.follower_id.in_(user_ids))
+        .group_by(models.Follow.follower_id)
+    )
+    following_map = dict(following_result.all())
+
+    votes_result = await db.execute(
+        select(models.Vote.voter_id, func.count(models.Vote.id))
+        .filter(models.Vote.voter_id.in_(user_ids))
+        .group_by(models.Vote.voter_id)
+    )
+    votes_map = dict(votes_result.all())
+
+    return [
+        schemas.User(
+            id=u.id,
+            email=u.email,
+            full_name=u.full_name,
+            avatar_url=u.avatar_url,
+            is_active=u.is_active,
+            is_superuser=u.is_superuser,
+            votes_cast_count=votes_map.get(u.id, 0),
+            follower_count=follower_map.get(u.id, 0),
+            following_count=following_map.get(u.id, 0),
+        )
+        for u in users
+    ]
+
+
 @router.get("/{user_id}/followers", response_model=List[schemas.User])
 async def get_followers(
     user_id: int,
@@ -586,26 +631,7 @@ async def get_followers(
     followers_result = await db.execute(join_stmt)
     followers = followers_result.scalars().all()
 
-    users_with_counts: List[schemas.User] = []
-    for u in followers:
-        follower_count, following_count = await _get_follow_counts(db, u.id)
-        votes_result = await db.execute(select(func.count(models.Vote.id)).filter(models.Vote.voter_id == u.id))
-        votes_count = votes_result.scalar() or 0
-        users_with_counts.append(
-            schemas.User(
-                id=u.id,
-                email=u.email,
-                full_name=u.full_name,
-                avatar_url=u.avatar_url,
-                is_active=u.is_active,
-                is_superuser=u.is_superuser,
-                votes_cast_count=votes_count,
-                follower_count=follower_count,
-                following_count=following_count,
-            )
-        )
-
-    return users_with_counts
+    return await _build_user_list_with_counts(db, followers)
 
 
 @router.get("/{user_id}/following", response_model=List[schemas.User])
@@ -627,26 +653,7 @@ async def get_following(
     following_result = await db.execute(join_stmt)
     following_users = following_result.scalars().all()
 
-    users_with_counts: List[schemas.User] = []
-    for u in following_users:
-        follower_count, following_count = await _get_follow_counts(db, u.id)
-        votes_result = await db.execute(select(func.count(models.Vote.id)).filter(models.Vote.voter_id == u.id))
-        votes_count = votes_result.scalar() or 0
-        users_with_counts.append(
-            schemas.User(
-                id=u.id,
-                email=u.email,
-                full_name=u.full_name,
-                avatar_url=u.avatar_url,
-                is_active=u.is_active,
-                is_superuser=u.is_superuser,
-                votes_cast_count=votes_count,
-                follower_count=follower_count,
-                following_count=following_count,
-            )
-        )
-
-    return users_with_counts
+    return await _build_user_list_with_counts(db, following_users)
 
 
 @router.get("/{user_id}/follow-stats", response_model=schemas.FollowStats)

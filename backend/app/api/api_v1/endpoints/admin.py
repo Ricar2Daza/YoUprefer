@@ -9,7 +9,10 @@ from app import models, schemas
 from app.api import deps
 from app.models.profile import Profile
 from app.models.comment import Comment
+import logging
 from app.services.season_service import season_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -61,7 +64,7 @@ async def approve_profile(
                 redis_client.delete(key)
             redis_client.delete(f"participation:{profile.user_id}")
     except Exception:
-        pass
+        logger.warning("Failed to invalidate cache after profile approval", exc_info=True)
     return profile
 
 @router.post("/{profile_id}/reject")
@@ -85,7 +88,7 @@ async def reject_profile(
         if redis_client:
             redis_client.delete(f"participation:{profile.user_id}")
     except Exception:
-        pass
+        logger.warning("Failed to invalidate cache after profile rejection", exc_info=True)
     return {"status": "rejected"}
 
 @router.post("/season/reset", response_model=List[schemas.Profile])

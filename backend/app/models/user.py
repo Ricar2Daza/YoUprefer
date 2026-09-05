@@ -13,6 +13,7 @@ class User(Base):
     is_active = Column(Boolean(), default=True)
     is_superuser = Column(Boolean(), default=False)
     is_banned = Column(Boolean(), default=False)
+    is_email_verified = Column(Boolean(), default=False, nullable=False)
     banned_until = Column(DateTime(timezone=True), nullable=True)
     ban_reason = Column(String, nullable=True)
     

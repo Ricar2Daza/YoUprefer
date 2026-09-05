@@ -116,12 +116,51 @@ async def test_full_integration_flow(client: AsyncClient, db: AsyncSession):
 
 
 def test_realtime_notifications_websocket_delivers_pubsub_event():
-    token = create_access_token("1")
+    """El WebSocket usa un ticket de corta duración (no el JWT) como credencial."""
+    import secrets
+
+    ticket = secrets.token_hex(16)
+    redis_client.setex(f"ws_ticket:{ticket}", 30, "1")
     payload = {"type": "direct_message", "payload": {"from_user_id": 2}}
     message = json.dumps(payload)
 
     with TestClient(app) as c:
-        with c.websocket_connect(f"{settings.API_V1_STR}/ws/notifications?token={token}") as ws:
+        with c.websocket_connect(
+            f"{settings.API_V1_STR}/ws/notifications?ticket={ticket}"
+        ) as ws:
             redis_client.publish("notifications:1", message)
             received = ws.receive_text()
             assert json.loads(received) == payload
+
+
+def _assert_websocket_rejected(url: str):
+    with TestClient(app) as c:
+        try:
+            with c.websocket_connect(url) as ws:
+                ws.receive_text()
+        except Exception:
+            return
+        raise AssertionError("WebSocket aceptó una conexión no autorizada")
+
+
+def test_websocket_rejects_missing_ticket():
+    """Conectar sin credencial debe ser rechazado."""
+    _assert_websocket_rejected(f"{settings.API_V1_STR}/ws/notifications")
+
+
+def test_websocket_rejects_invalid_ticket():
+    """Un ticket inexistente debe ser rechazado."""
+    _assert_websocket_rejected(
+        f"{settings.API_V1_STR}/ws/notifications?ticket=not-a-real-ticket"
+    )
+
+
+def test_websocket_rejects_expired_ticket():
+    """Un ticket vencido/consumido no debe volver a abrir la conexión."""
+    import secrets
+
+    ticket = secrets.token_hex(16)
+    # Sin setex: el ticket nunca existió, por lo que debe ser rechazado
+    _assert_websocket_rejected(
+        f"{settings.API_V1_STR}/ws/notifications?ticket={ticket}"
+    )
