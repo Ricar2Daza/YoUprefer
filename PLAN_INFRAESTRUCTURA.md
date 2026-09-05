@@ -6,15 +6,16 @@ Trunk, contenedores con Podman, registro de imágenes, infraestructura como cód
 
 ## 0. Lo que ya está hecho
 
-- CI/CD en GitHub Actions (`.github/workflows/ci.yml`), metodología **Trunk-Based**:
-  - Rama larga única: `main`.
-  - Devs crean **ramas cortas** (`feat/x`, `fix/y`) y abren PR hacia `main`.
-  - Cualquier `push` (a cualquier rama) y cualquier PR hacia `main` ejecutan el
-    pipeline: backend (pytest + cobertura ≥80%), frontend (lint + tests + build),
-    mobile (tests Expo).
-  - El push a `main` (trunk) dispara además el **CD**: build con **Podman** y push
-    de la imagen `ghcr.io/<owner>/youprefer-api:{main,<sha>}` a GHCR.
-  - Protección recomendada de `main`: exigir PR + 1 review + checks verdes.
+- CI/CD en GitHub Actions con metodología **Trunk-Based**, uno por repositorio
+  (cada repo corre su propio CI con su propio `GITHUB_TOKEN`, sin PAT ni
+  submódulos):
+  - **YoUprefer** (backend): `backend` (pytest + cobertura ≥70%) en push/PR y
+    `publish-image` (Podman → GHCR) en push a `main`.
+  - **frontend-YoUprefer**: lint + tests + build (push/PR sobre `master`).
+  - **mobile-YoUprefer**: tests Expo (push/PR sobre `master`).
+- Rama larga única por repo (`main` en backend, `master` en frontend/mobile).
+  Devs crean ramas cortas y abren PR.
+- Protección recomendada de la rama larga: exigir PR + 1 review + checks verdes.
 
 ## 1. Registry de contenedores
 
