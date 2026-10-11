@@ -19,22 +19,27 @@ class StorageService:
         else:
             self.s3_client = None
 
-    def get_presigned_url(self, object_name: str, expiration: int = 3600):
+    def get_presigned_put_url(self, object_name: str, content_type: str = "image/jpeg", expiration: int = 600):
         """
-        Generar una URL prefirmada para subir una imagen directamente a R2.
+        URL prefirmada para subir con PUT directo a R2.
+        R2 NO soporta presigned POST (devolvía 501 "Presigned post requests
+        are not yet implemented"): la subida desde el navegador usa PUT.
         """
         if not self.s3_client:
             return None
-        
+
         try:
-            response = self.s3_client.generate_presigned_post(
-                Bucket=settings.R2_BUCKET_NAME,
-                Key=object_name,
-                ExpiresIn=expiration
+            return self.s3_client.generate_presigned_url(
+                'put_object',
+                Params={
+                    'Bucket': settings.R2_BUCKET_NAME,
+                    'Key': object_name,
+                    'ContentType': content_type,
+                },
+                ExpiresIn=expiration,
+                HttpMethod='PUT'
             )
-            return response
-        except Exception as e:
-            # En producción, registrar este error
+        except Exception:
             return None
 
     def get_public_url(self, object_name: str):

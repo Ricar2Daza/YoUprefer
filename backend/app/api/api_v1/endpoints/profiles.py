@@ -228,16 +228,20 @@ async def create_profile(
     await db.commit()
     await db.refresh(db_obj)
     
-    # Obtener URL prefirmada para el frontend
-    upload_data = storage_service.get_presigned_url(object_name)
-    
-    if not upload_data:
+    # Obtener URL prefirmada (PUT) para el frontend: R2 no soporta presigned POST.
+    upload_url = storage_service.get_presigned_put_url(
+        object_name,
+        content_type=profile_in.image_content_type or "image/jpeg"
+    )
+    if not upload_url:
          raise HTTPException(status_code=500, detail="No se pudo generar la URL de subida")
 
     logger.info(f"participation_status_changed user_id={current_user.id} profile_id={db_obj.id} action=create_pending")
     return {
         "profile": jsonable_encoder(db_obj),
-        "upload_url": upload_data
+        "upload_url": upload_url,
+        "upload_method": "PUT",
+        "object_key": object_name,
     }
 
 @router.post("/upload-direct")

@@ -1,0 +1,6 @@
+[submodule "frontend"]
+	path = frontend
+	url = https://github.com/Ricar2Daza/frontend-YoUprefer.git
+[submodule "mobile"]
+	path = mobile
+	url = https://github.com/Ricar2Daza/mobile-YoUprefer.git

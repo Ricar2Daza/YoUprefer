@@ -12,6 +12,7 @@ class ProfileCreate(BaseModel):
     gender: Gender
     legal_consent: bool
     image_extension: Optional[str] = "jpg"
+    image_content_type: Optional[str] = "image/jpeg"
     category_id: Optional[int] = None
 
 class ProfileUpdate(ProfileBase):
